@@ -92,11 +92,11 @@ export interface OptionChainSpecificOption {
   UnderlyingUic?: number;
 }
 
-export function getOptionChain(
+export async function getOptionChain(
   client: SaxoClient,
   input: GetOptionChainInput,
 ): Promise<OptionChainRawResponse> {
-  return client.get<OptionChainRawResponse>(
+  const response = await client.get<OptionChainRawResponse>(
     `/ref/v1/instruments/contractoptionspaces/${encodeURIComponent(input.optionRootId)}`,
     {
       ExpiryDates: input.expiryDates?.join(','),
@@ -106,6 +106,17 @@ export function getOptionChain(
       Trading: input.trading,
     },
   );
+
+  // Saxo's `ExpiryDates` query param is unreliable — observed against SIM:
+  // when a single expiry is passed, the response still includes every
+  // expiry with full `SpecificOptions` populated. Filter client-side so
+  // the caller actually gets what they asked for.
+  if (input.expiryDates && input.expiryDates.length > 0 && response.OptionSpace) {
+    const wanted = new Set(input.expiryDates);
+    response.OptionSpace = response.OptionSpace.filter(e => wanted.has(e.Expiry));
+  }
+
+  return response;
 }
 
 export interface NormalizedExpiry {

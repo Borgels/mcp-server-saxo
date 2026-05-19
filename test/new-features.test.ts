@@ -313,6 +313,61 @@ describe('computeSpreadQuote bidAskWidth (regression — was returning fp noise)
   });
 });
 
+describe('getOptionChain client-side ExpiryDates filter (regression)', () => {
+  it('filters OptionSpace entries to only the requested expiries (Saxo API ignores the param)', async () => {
+    const { getOptionChain } = await import('../src/saxo/reference.js');
+    // Saxo SIM returns ALL expiries with SpecificOptions populated even
+    // when ExpiryDates=2027-01-15 is passed. Confirmed live. Our
+    // getOptionChain has to filter client-side.
+    const saxoResponse = {
+      OptionSpace: [
+        { Expiry: '2026-06-18', SpecificOptions: [{ Uic: 1, StrikePrice: 5, PutCall: 'Call' }] },
+        { Expiry: '2027-01-15', SpecificOptions: [{ Uic: 2, StrikePrice: 5, PutCall: 'Call' }] },
+        { Expiry: '2027-06-17', SpecificOptions: [{ Uic: 3, StrikePrice: 5, PutCall: 'Call' }] },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify(saxoResponse), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const filtered = await getOptionChain(client, {
+      optionRootId: 1467,
+      expiryDates: ['2027-01-15'],
+    });
+    expect(filtered.OptionSpace?.map(e => e.Expiry)).toEqual(['2027-01-15']);
+  });
+
+  it('returns all expiries when no filter is passed', async () => {
+    const { getOptionChain } = await import('../src/saxo/reference.js');
+    const saxoResponse = {
+      OptionSpace: [
+        { Expiry: '2026-06-18', SpecificOptions: [] },
+        { Expiry: '2027-01-15', SpecificOptions: [] },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(
+      async () =>
+        new Response(JSON.stringify(saxoResponse), {
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const all = await getOptionChain(client, { optionRootId: 1467 });
+    expect(all.OptionSpace?.length).toBe(2);
+  });
+});
+
 describe('normalizeOptionChain drops empty expiry slots (regression)', () => {
   it('keeps only expiries with SpecificOptions populated when Saxo returns filler entries', async () => {
     const { normalizeOptionChain } = await import('../src/saxo/reference.js');

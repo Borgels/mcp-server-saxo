@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-19
+
+Follow-up to 0.1.3: the ExpiryDates filter fix shipped in 0.1.3
+turned out to be incorrect when verified against live Saxo SIM. My
+0.1.3 fix relied on the assumption that Saxo returns `OptionSpace`
+entries with EMPTY `SpecificOptions` for non-matching expiries —
+which the API actually doesn't do. Live SIM returns all 15 expiries
+with full strike data populated, regardless of the `ExpiryDates`
+query parameter.
+
+### Fixed
+
+- `saxo_get_option_chain` now filters the response client-side when
+  `expiryDates` is provided, since Saxo's `ExpiryDates` query
+  parameter is unreliable on SIM (and presumably on LIVE too —
+  haven't verified). The filter runs inside `getOptionChain` before
+  the response is returned, so all downstream consumers
+  (normalizeOptionChain, list_option_expiries when called with a
+  filter, etc.) see a correctly-filtered raw response.
+- 0.1.3's drop-empty-expiries logic in `normalizeOptionChain` is
+  kept as defense-in-depth; it's a no-op now but protects against
+  future Saxo behavior where an expiry might legitimately come back
+  without strike data.
+
+### Verified
+
+- Live SIM end-to-end run against the actual `getOptionChain` +
+  `computeSpreadQuote` code paths (`test/bugfix-verify.mjs` —
+  not part of the suite, kept locally as a one-shot probe).
+  Confirms:
+  - `expiryDates: ["2027-01-15"]` returns 1 expiry (was 15).
+  - `bidAskWidth` for NOK 15/20 spread = 0.15, matches the
+    `worstCaseDebit − bestCaseDebit` identity exactly.
+
+### Tests
+
+- New unit test for the client-side filter in `getOptionChain`:
+  verifies that when `expiryDates` is passed, the returned
+  `OptionSpace` is filtered to just those entries.
+- New unit test for the unfiltered case to ensure no regression.
+
 ## [0.1.3] - 2026-05-19
 
 Two bug fixes caught by driving the live SIM tools end-to-end through
@@ -317,7 +358,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.1.1
