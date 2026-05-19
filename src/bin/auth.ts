@@ -100,15 +100,26 @@ function printHelp(): void {
 Environment variables required:
   SAXO_APP_KEY
   SAXO_APP_SECRET
-  SAXO_REDIRECT_URI (default http://127.0.0.1:8765/callback)
+  SAXO_REDIRECT_URI (default http://localhost:8765/callback). The exact value
+  must be registered in the Saxo app. Saxo's authorize endpoint rejects IP-
+  literal redirects, so use a hostname (localhost), not 127.0.0.1.
 `);
 }
 
 function openBrowser(url: string): void {
-  const command =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  // On Windows `start` is a cmd builtin, not an executable, so we have to go
+  // through the shell. On macOS/Linux we exec `open` / `xdg-open` directly.
+  const isWindows = process.platform === 'win32';
+  const command = isWindows ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = isWindows ? ['/c', 'start', '""', url] : [url];
   try {
-    spawn(command, [url], { stdio: 'ignore', detached: true }).unref();
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    // spawn() emits ENOENT asynchronously via 'error' if the binary is missing —
+    // a try/catch around spawn() will not catch it. Swallow it explicitly.
+    child.on('error', () => {
+      // ignore — user can copy/paste the URL printed earlier.
+    });
+    child.unref();
   } catch {
     // ignore — user can copy/paste the URL printed earlier.
   }

@@ -80,7 +80,7 @@ never accepted as tool arguments.
 | `SAXO_REFRESH_TOKEN` | LIVE / long-running SIM | Together with app credentials enables 401-auto-refresh. |
 | `SAXO_APP_KEY` | refresh / OAuth | Application key from the developer portal. |
 | `SAXO_APP_SECRET` | refresh / OAuth | Application secret. |
-| `SAXO_REDIRECT_URI` | OAuth | Defaults to `http://127.0.0.1:8765/callback`. Loopback only. |
+| `SAXO_REDIRECT_URI` | OAuth | Defaults to `http://localhost:8765/callback`. Loopback only — and Saxo's authorize endpoint rejects IP-literal redirects, so use the `localhost` hostname rather than `127.0.0.1`. The URL in your app's Redirect URLs list must match exactly. |
 | `SAXO_TIMEOUT_MS` | optional | Request timeout in ms (default 30000). |
 
 ### Two ways to log in for LIVE / long-running SIM

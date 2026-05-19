@@ -43,7 +43,11 @@ export function loadOauthConfigFromEnv(environment?: SaxoEnvironment | string): 
       'OAuth requires SAXO_APP_KEY and SAXO_APP_SECRET in the MCP server environment.',
     );
   }
-  const redirectUri = process.env.SAXO_REDIRECT_URI ?? 'http://127.0.0.1:8765/callback';
+  // Saxo's authorize endpoint rejects IP-literal redirects with
+  // "Invalid value of redirect_uri parameter. It must be an absolute uri",
+  // so the default uses the localhost hostname. The registered URL in the
+  // Saxo app config must match exactly.
+  const redirectUri = process.env.SAXO_REDIRECT_URI ?? 'http://localhost:8765/callback';
   return { environment: env, appKey, appSecret, redirectUri };
 }
 
