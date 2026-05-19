@@ -1,0 +1,215 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { searchCapabilities } from '../src/saxo/capabilities.js';
+import { SaxoClient } from '../src/saxo/client.js';
+import { checkToolAllowed } from '../src/saxo/policy.js';
+import { registerSaxoTools } from '../src/tools/saxo.js';
+
+const ENV_KEYS = [
+  'SAXO_AUDIT_LOG',
+  'SAXO_ENABLE_LIVE_TRADING',
+  'SAXO_POLICY_PATH',
+  'SAXO_ENVIRONMENT',
+];
+const savedEnv: Record<string, string | undefined> = {};
+let tempDir: string | undefined;
+
+describe('Saxo tool registration', () => {
+  beforeEach(() => {
+    for (const key of ENV_KEYS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+  });
+
+  afterEach(async () => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedEnv[key];
+      }
+    }
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
+  });
+
+  it('registers all Saxo tools with correct annotations', () => {
+    const registered = captureRegisteredTools();
+
+    const ids = Object.keys(registered);
+    expect(ids).toEqual([
+      'saxo_capabilities',
+      'saxo_session_me',
+      'saxo_diagnostics',
+      'saxo_search_instruments',
+      'saxo_get_instrument_details',
+      'saxo_list_exchanges',
+      'saxo_get_infoprice',
+      'saxo_get_infoprices_list',
+      'saxo_get_chart',
+      'saxo_list_accounts',
+      'saxo_get_balance',
+      'saxo_list_positions',
+      'saxo_list_closed_positions',
+      'saxo_list_orders',
+      'saxo_get_order',
+      'saxo_precheck_order',
+      'saxo_place_order',
+      'saxo_modify_order',
+      'saxo_cancel_order',
+      'saxo_oauth_start',
+      'saxo_oauth_complete',
+      'saxo_oauth_cancel',
+    ]);
+
+    const readOnly = [
+      'saxo_capabilities',
+      'saxo_session_me',
+      'saxo_diagnostics',
+      'saxo_search_instruments',
+      'saxo_get_instrument_details',
+      'saxo_list_exchanges',
+      'saxo_get_infoprice',
+      'saxo_get_infoprices_list',
+      'saxo_get_chart',
+      'saxo_list_accounts',
+      'saxo_get_balance',
+      'saxo_list_positions',
+      'saxo_list_closed_positions',
+      'saxo_list_orders',
+      'saxo_get_order',
+    ];
+    for (const id of readOnly) {
+      expect(registered[id]?.config.annotations).toMatchObject({
+        readOnlyHint: true,
+        destructiveHint: false,
+      });
+    }
+
+    const writeIds = [
+      'saxo_precheck_order',
+      'saxo_place_order',
+      'saxo_modify_order',
+      'saxo_cancel_order',
+      'saxo_oauth_start',
+      'saxo_oauth_complete',
+      'saxo_oauth_cancel',
+    ];
+    for (const id of writeIds) {
+      expect(registered[id]?.config.annotations).toMatchObject({
+        readOnlyHint: false,
+        destructiveHint: true,
+      });
+    }
+  });
+
+  it('searchCapabilities returns the right tools for queries', () => {
+    const results = searchCapabilities('order');
+    expect(results.map(r => r.id)).toEqual(expect.arrayContaining(['saxo_place_order', 'saxo_get_order']));
+  });
+
+  it('policy denies place_order on LIVE without SAXO_ENABLE_LIVE_TRADING', () => {
+    expect(
+      checkToolAllowed({ tool: 'saxo_place_order', environment: 'live', liveTradingEnabled: false }),
+    ).toMatchObject({ allowed: false });
+  });
+
+  it('saxo_place_order on LIVE throws before any fetch when SAXO_ENABLE_LIVE_TRADING is unset', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}'));
+    const client = new SaxoClient({
+      environment: 'live',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const registered = captureRegisteredTools(client);
+
+    const tool = registered.saxo_place_order;
+    if (!tool) throw new Error('saxo_place_order not registered');
+
+    await expect(
+      tool.handler({
+        AccountKey: 'k',
+        Uic: 211,
+        AssetType: 'Stock',
+        BuySell: 'Buy',
+        Amount: 1,
+        OrderType: 'Market',
+        OrderDuration: { DurationType: 'DayOrder' },
+      }),
+    ).rejects.toThrow(/SAXO_ENABLE_LIVE_TRADING/);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('audits tool calls without writing raw inputs', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'saxo-audit-'));
+    const auditPath = join(tempDir, 'audit.jsonl');
+    process.env.SAXO_AUDIT_LOG = auditPath;
+
+    const registered = captureRegisteredTools();
+    const tool = registered.saxo_capabilities;
+    if (!tool) throw new Error('saxo_capabilities not registered');
+
+    await tool.handler({ query: 'place order', limit: 5 });
+
+    const text = await readFile(auditPath, 'utf8');
+    const records = text
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({
+      tool: 'saxo_capabilities',
+      action: 'start',
+      environment: 'sim',
+    });
+    expect(records[1]).toMatchObject({
+      tool: 'saxo_capabilities',
+      action: 'finish',
+      status: 'ok',
+    });
+    expect(text).not.toContain('place order');
+  });
+});
+
+function captureRegisteredTools(
+  client?: SaxoClient,
+): Record<
+  string,
+  {
+    config: { annotations?: unknown };
+    handler: (input: Record<string, unknown>) => Promise<unknown>;
+  }
+> {
+  const registered: Record<
+    string,
+    {
+      config: { annotations?: unknown };
+      handler: (input: Record<string, unknown>) => Promise<unknown>;
+    }
+  > = {};
+  const stub = {
+    registerTool: (name: string, config: { annotations?: unknown }, handler: unknown) => {
+      registered[name] = {
+        config,
+        handler: handler as (input: Record<string, unknown>) => Promise<unknown>,
+      };
+    },
+  } as unknown as Parameters<typeof registerSaxoTools>[0];
+
+  const saxo =
+    client ??
+    new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake-token',
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+    });
+
+  registerSaxoTools(stub, saxo);
+  return registered;
+}

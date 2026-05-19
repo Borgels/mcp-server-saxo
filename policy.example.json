@@ -1,0 +1,23 @@
+{
+  "allow_live_writes": false,
+  "require_precheck_on_live": true,
+  "allowed_asset_types": [
+    "FxSpot",
+    "Stock",
+    "Etf",
+    "Bond",
+    "MutualFund",
+    "CfdOnFutures",
+    "CfdOnIndex",
+    "CfdOnStock"
+  ],
+  "allowed_account_keys": [],
+  "denied_uics": [],
+  "max_order_amount": {
+    "default": 10000,
+    "FxSpot": 50000,
+    "Stock": 1000,
+    "Etf": 1000
+  },
+  "max_notional": 100000
+}

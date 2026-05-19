@@ -1,0 +1,324 @@
+export type CapabilityRisk = 'read' | 'write';
+
+export interface SaxoCapability {
+  id: string;
+  title: string;
+  description: string;
+  risk: CapabilityRisk;
+  examples: unknown[];
+  identifierFormats: string[];
+  safetyNotes: string[];
+  keywords: string[];
+}
+
+export const READ_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+export const WRITE_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: false,
+  openWorldHint: true,
+} as const;
+
+export const SAXO_CAPABILITIES: SaxoCapability[] = [
+  {
+    id: 'saxo_capabilities',
+    title: 'Search Saxo Capabilities',
+    description: 'Discover the Saxo MCP tools, their inputs and risk level.',
+    risk: 'read',
+    examples: [{ query: 'place order' }],
+    identifierFormats: ['Tool id such as saxo_get_infoprice or saxo_place_order.'],
+    safetyNotes: ['Discovery only. Does not call Saxo.'],
+    keywords: ['discover', 'capabilities', 'help', 'tools'],
+  },
+  {
+    id: 'saxo_session_me',
+    title: 'Get Saxo Session',
+    description: 'Return the current Saxo session: ClientKey, UserKey, default account, language, culture.',
+    risk: 'read',
+    examples: [{}],
+    identifierFormats: [],
+    safetyNotes: ['Validates the access token without side effects.'],
+    keywords: ['session', 'me', 'whoami', 'token check'],
+  },
+  {
+    id: 'saxo_diagnostics',
+    title: 'Saxo OpenAPI Diagnostics',
+    description: 'Hit the Saxo diagnostics endpoint to verify connectivity.',
+    risk: 'read',
+    examples: [{}],
+    identifierFormats: [],
+    safetyNotes: ['Read-only.'],
+    keywords: ['diagnostics', 'health', 'ping'],
+  },
+  {
+    id: 'saxo_search_instruments',
+    title: 'Search Instruments',
+    description: 'Search Saxo reference data for instruments by keyword and asset type.',
+    risk: 'read',
+    examples: [{ keywords: 'Apple', assetTypes: ['Stock'], top: 10 }],
+    identifierFormats: ['Free text', 'ISIN', 'Symbol'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['search', 'instrument', 'isin', 'symbol', 'lookup'],
+  },
+  {
+    id: 'saxo_get_instrument_details',
+    title: 'Get Instrument Details',
+    description: 'Fetch detailed metadata for one or more instruments by Uic and AssetType.',
+    risk: 'read',
+    examples: [{ uics: [211], assetType: 'Stock' }],
+    identifierFormats: ['Uic (integer)', 'AssetType'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['instrument', 'details', 'uic', 'metadata'],
+  },
+  {
+    id: 'saxo_list_exchanges',
+    title: 'List Exchanges',
+    description: 'List Saxo-supported exchanges (or one by ExchangeId).',
+    risk: 'read',
+    examples: [{ top: 20 }],
+    identifierFormats: ['ExchangeId'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['exchanges', 'venues', 'mic'],
+  },
+  {
+    id: 'saxo_get_infoprice',
+    title: 'Get Snapshot Price',
+    description: 'Fetch a snapshot bid/ask/last price for a single instrument.',
+    risk: 'read',
+    examples: [{ uic: 211, assetType: 'Stock', fieldGroups: ['Quote', 'PriceInfoDetails'] }],
+    identifierFormats: ['Uic + AssetType'],
+    safetyNotes: ['Read-only snapshot. No subscription side effects.'],
+    keywords: ['price', 'quote', 'infoprice', 'snapshot'],
+  },
+  {
+    id: 'saxo_get_infoprices_list',
+    title: 'Get Snapshot Prices (List)',
+    description: 'Fetch snapshot prices for multiple Uics in one call.',
+    risk: 'read',
+    examples: [{ uics: [211, 16], assetType: 'Stock' }],
+    identifierFormats: ['Uic[] + AssetType'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['price', 'list', 'batch', 'snapshot'],
+  },
+  {
+    id: 'saxo_get_chart',
+    title: 'Get Chart (Historical OHLC)',
+    description: 'Fetch historical OHLC bars for an instrument and horizon (minutes).',
+    risk: 'read',
+    examples: [{ uic: 211, assetType: 'Stock', horizon: 60, count: 100 }],
+    identifierFormats: ['Uic + AssetType + Horizon (minutes)'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['chart', 'ohlc', 'bars', 'history', 'candles'],
+  },
+  {
+    id: 'saxo_list_accounts',
+    title: 'List Accounts',
+    description: "List the authenticated client's trading accounts.",
+    risk: 'read',
+    examples: [{}],
+    identifierFormats: ['Optional ClientKey'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['accounts', 'portfolio', 'client'],
+  },
+  {
+    id: 'saxo_get_balance',
+    title: 'Get Account Balance',
+    description: 'Fetch the cash + margin balance for an account.',
+    risk: 'read',
+    examples: [{ accountKey: 'AccountKey...' }],
+    identifierFormats: ['AccountKey'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['balance', 'cash', 'margin'],
+  },
+  {
+    id: 'saxo_list_positions',
+    title: 'List Open Positions',
+    description: 'List open positions for the authenticated client or a specific account.',
+    risk: 'read',
+    examples: [{}],
+    identifierFormats: ['Optional AccountKey or ClientKey'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['positions', 'open', 'portfolio'],
+  },
+  {
+    id: 'saxo_list_closed_positions',
+    title: 'List Closed Positions',
+    description: 'List closed positions / trade history.',
+    risk: 'read',
+    examples: [{ fromDate: '2026-01-01' }],
+    identifierFormats: ['Optional AccountKey, date range'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['closed', 'history', 'pnl'],
+  },
+  {
+    id: 'saxo_list_orders',
+    title: 'List Orders',
+    description: 'List working orders for the authenticated client or account.',
+    risk: 'read',
+    examples: [{ status: 'Working' }],
+    identifierFormats: ['Optional AccountKey'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['orders', 'working', 'pending'],
+  },
+  {
+    id: 'saxo_get_order',
+    title: 'Get Order',
+    description: 'Fetch a specific order by OrderId.',
+    risk: 'read',
+    examples: [{ orderId: '12345678' }],
+    identifierFormats: ['OrderId'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['order', 'detail'],
+  },
+  {
+    id: 'saxo_precheck_order',
+    title: 'Precheck Order',
+    description: 'Validate an order against Saxo (margin, prices, instrument rules) without placing it.',
+    risk: 'write',
+    examples: [
+      {
+        AccountKey: 'AccountKey...',
+        Uic: 211,
+        AssetType: 'Stock',
+        BuySell: 'Buy',
+        Amount: 1,
+        OrderType: 'Market',
+        OrderDuration: { DurationType: 'DayOrder' },
+      },
+    ],
+    identifierFormats: ['Full Saxo order body'],
+    safetyNotes: [
+      'No execution but counted as a write tool — runs through policy + audit.',
+    ],
+    keywords: ['precheck', 'validate', 'dryrun'],
+  },
+  {
+    id: 'saxo_place_order',
+    title: 'Place Order',
+    description:
+      'Place a new order. On LIVE requires SAXO_ENABLE_LIVE_TRADING=true and a policy.json that sets allow_live_writes=true.',
+    risk: 'write',
+    examples: [
+      {
+        AccountKey: 'AccountKey...',
+        Uic: 211,
+        AssetType: 'Stock',
+        BuySell: 'Buy',
+        Amount: 1,
+        OrderType: 'Market',
+        OrderDuration: { DurationType: 'DayOrder' },
+      },
+    ],
+    identifierFormats: ['Full Saxo order body'],
+    safetyNotes: [
+      'Defaults to SIM. LIVE writes are denied unless explicitly enabled.',
+      'Policy may cap Amount, AssetType, AccountKey, Uic, and notional.',
+    ],
+    keywords: ['place', 'order', 'buy', 'sell', 'trade'],
+  },
+  {
+    id: 'saxo_modify_order',
+    title: 'Modify Order',
+    description: 'Modify an existing working order (amount, price, duration).',
+    risk: 'write',
+    examples: [
+      {
+        OrderId: '12345678',
+        AccountKey: 'AccountKey...',
+        Uic: 211,
+        AssetType: 'Stock',
+        OrderPrice: 150.5,
+      },
+    ],
+    identifierFormats: ['OrderId + AccountKey + Uic + AssetType'],
+    safetyNotes: ['Same guards as saxo_place_order.'],
+    keywords: ['modify', 'change', 'order'],
+  },
+  {
+    id: 'saxo_cancel_order',
+    title: 'Cancel Order',
+    description: 'Cancel one or more working orders.',
+    risk: 'write',
+    examples: [{ orderIds: ['12345678'], accountKey: 'AccountKey...' }],
+    identifierFormats: ['OrderId[]'],
+    safetyNotes: ['LIVE writes require SAXO_ENABLE_LIVE_TRADING=true.'],
+    keywords: ['cancel', 'order', 'delete'],
+  },
+  {
+    id: 'saxo_oauth_start',
+    title: 'Start Saxo OAuth Login',
+    description:
+      'Begin a Saxo OAuth2 + PKCE login. Returns a ticketId, an authorize URL the user opens in their browser, and the loopback redirect URI. Requires SAXO_APP_KEY + SAXO_APP_SECRET in the MCP server environment.',
+    risk: 'write',
+    examples: [{ environment: 'sim' }],
+    identifierFormats: ['environment: sim|live'],
+    safetyNotes: [
+      'Only listens on loopback (127.0.0.1).',
+      'Tokens never leave the MCP server process unless writeToEnvFile is set.',
+    ],
+    keywords: ['oauth', 'login', 'token', 'pkce', 'authorize'],
+  },
+  {
+    id: 'saxo_oauth_complete',
+    title: 'Complete Saxo OAuth Login',
+    description:
+      'Finish a Saxo OAuth login started by saxo_oauth_start. Waits for the user to approve in the browser, exchanges the code for tokens, and updates the running MCP server. Optionally writes tokens to a .env file.',
+    risk: 'write',
+    examples: [{ ticketId: 'uuid', timeoutSeconds: 120 }],
+    identifierFormats: ['ticketId from saxo_oauth_start'],
+    safetyNotes: [
+      'Tokens replace SAXO_ACCESS_TOKEN/SAXO_REFRESH_TOKEN in the running process.',
+      'Persisting to .env is opt-in.',
+    ],
+    keywords: ['oauth', 'complete', 'callback', 'tokens'],
+  },
+  {
+    id: 'saxo_oauth_cancel',
+    title: 'Cancel Saxo OAuth Login',
+    description: 'Cancel a pending OAuth login (closes the callback listener).',
+    risk: 'write',
+    examples: [{ ticketId: 'uuid' }],
+    identifierFormats: ['ticketId from saxo_oauth_start'],
+    safetyNotes: ['No persistent effect.'],
+    keywords: ['oauth', 'cancel', 'abort'],
+  },
+];
+
+export function searchCapabilities(query: string, limit = 20): SaxoCapability[] {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) {
+    return SAXO_CAPABILITIES.slice(0, limit);
+  }
+
+  return SAXO_CAPABILITIES.map(capability => ({
+    capability,
+    score: scoreCapability(capability, normalized),
+  }))
+    .filter(item => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.capability.id.localeCompare(b.capability.id))
+    .slice(0, limit)
+    .map(item => item.capability);
+}
+
+function scoreCapability(capability: SaxoCapability, query: string): number {
+  const haystack = [
+    capability.id,
+    capability.title,
+    capability.description,
+    ...capability.identifierFormats,
+    ...capability.keywords,
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return query
+    .split(/\s+/)
+    .filter(Boolean)
+    .reduce((score, term) => score + (haystack.includes(term) ? 1 : 0), 0);
+}

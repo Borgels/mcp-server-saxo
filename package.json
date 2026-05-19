@@ -1,0 +1,63 @@
+{
+  "name": "mcp-server-saxo",
+  "version": "0.1.0",
+  "description": "MCP server for the Saxo Bank OpenAPI (SIM and LIVE trading).",
+  "type": "module",
+  "main": "./dist/stdio.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example",
+    "policy.example.json"
+  ],
+  "bin": {
+    "mcp-server-saxo": "./dist/stdio.js"
+  },
+  "scripts": {
+    "build": "tsup src/transports/stdio.ts src/transports/http.ts src/bin/auth.ts --format esm --dts --clean --sourcemap",
+    "dev": "tsx src/transports/stdio.ts",
+    "dev:http": "tsx src/transports/http.ts",
+    "auth": "tsx src/bin/auth.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run typecheck && npm test && npm run build",
+    "smoke:live": "tsx test/live-smoke.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Borgels/mcp-server-saxo.git"
+  },
+  "keywords": [
+    "mcp",
+    "saxo",
+    "saxobank",
+    "trading",
+    "openapi"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bugs": {
+    "url": "https://github.com/Borgels/mcp-server-saxo/issues"
+  },
+  "homepage": "https://github.com/Borgels/mcp-server-saxo#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "overrides": {
+    "ip-address": ">=10.1.1",
+    "hono": ">=4.12.16",
+    "fast-uri": ">=3.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
