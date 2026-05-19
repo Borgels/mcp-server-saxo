@@ -1,4 +1,5 @@
 import type { SaxoClient } from './client.js';
+import { readBoolEnv, readEnv } from './env.js';
 
 export interface SaxoSessionInfo {
   ClientKey?: string;
@@ -97,7 +98,7 @@ export async function getDiagnostics(client: SaxoClient): Promise<SaxoDiagnostic
   }
 
   if (client.isLive()) {
-    const liveEnabled = (process.env.SAXO_ENABLE_LIVE_TRADING ?? 'false').trim().toLowerCase() === 'true';
+    const liveEnabled = readBoolEnv('SAXO_ENABLE_LIVE_TRADING', false);
     if (!liveEnabled) {
       warnings.push('Environment=live but SAXO_ENABLE_LIVE_TRADING=false — all write tools will be denied.');
     }
@@ -106,10 +107,9 @@ export async function getDiagnostics(client: SaxoClient): Promise<SaxoDiagnostic
   return {
     environment: client.environment,
     baseUrl: client.baseUrl,
-    liveTradingEnabled:
-      (process.env.SAXO_ENABLE_LIVE_TRADING ?? 'false').trim().toLowerCase() === 'true',
-    policyPath: process.env.SAXO_POLICY_PATH || undefined,
-    auditLogPath: process.env.SAXO_AUDIT_LOG || undefined,
+    liveTradingEnabled: readBoolEnv('SAXO_ENABLE_LIVE_TRADING', false),
+    policyPath: readEnv('SAXO_POLICY_PATH'),
+    auditLogPath: readEnv('SAXO_AUDIT_LOG'),
     session: {
       name: session?.Name,
       userId: session?.UserId,

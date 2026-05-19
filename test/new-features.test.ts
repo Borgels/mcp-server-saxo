@@ -19,6 +19,54 @@ import {
 } from '../src/saxo/reference.js';
 import { inspectAccessToken } from '../src/saxo/session.js';
 
+describe('readEnv treats MCPB unresolved placeholders as unset', () => {
+  const KEY = 'SAXO_TEST_PLACEHOLDER_KEY';
+  it('returns undefined when value is literal ${user_config.NAME}', async () => {
+    const { readEnv } = await import('../src/saxo/env.js');
+    process.env[KEY] = '${user_config.SAXO_POLICY_PATH}';
+    expect(readEnv(KEY)).toBeUndefined();
+    delete process.env[KEY];
+  });
+  it('returns the value when set normally', async () => {
+    const { readEnv } = await import('../src/saxo/env.js');
+    process.env[KEY] = '/tmp/policy.json';
+    expect(readEnv(KEY)).toBe('/tmp/policy.json');
+    delete process.env[KEY];
+  });
+  it('readBoolEnv falls back when value is a placeholder', async () => {
+    const { readBoolEnv } = await import('../src/saxo/env.js');
+    process.env[KEY] = '${user_config.SAXO_ENABLE_LIVE_TRADING}';
+    expect(readBoolEnv(KEY, false)).toBe(false);
+    expect(readBoolEnv(KEY, true)).toBe(true);
+    delete process.env[KEY];
+  });
+  it('readNumberEnv falls back when value is a placeholder', async () => {
+    const { readNumberEnv } = await import('../src/saxo/env.js');
+    process.env[KEY] = '${user_config.SAXO_TIMEOUT_MS}';
+    expect(readNumberEnv(KEY, 5000)).toBe(5000);
+    delete process.env[KEY];
+  });
+});
+
+describe('loadPolicy is resilient to MCPB placeholder strings', () => {
+  it('returns DEFAULT_POLICY when SAXO_POLICY_PATH is an unresolved placeholder', async () => {
+    const { loadPolicy, resetPolicyCache, DEFAULT_POLICY } = await import('../src/saxo/policy.js');
+    resetPolicyCache();
+    const original = process.env.SAXO_POLICY_PATH;
+    process.env.SAXO_POLICY_PATH = '${user_config.SAXO_POLICY_PATH}';
+    try {
+      expect(loadPolicy()).toEqual(DEFAULT_POLICY);
+    } finally {
+      if (original === undefined) {
+        delete process.env.SAXO_POLICY_PATH;
+      } else {
+        process.env.SAXO_POLICY_PATH = original;
+      }
+      resetPolicyCache();
+    }
+  });
+});
+
 describe('contractMultiplier', () => {
   it('returns 100 for option asset types', () => {
     expect(contractMultiplier('StockOption')).toBe(100);

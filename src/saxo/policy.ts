@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { SaxoPolicyDeniedError } from '../errors.js';
+import { readBoolEnv, readEnv } from './env.js';
 import type { SaxoEnvironment } from './environment.js';
 
 const READ_ONLY_TOOLS = new Set([
@@ -58,7 +59,7 @@ export const DEFAULT_POLICY: SaxoPolicy = {
 
 let cachedPolicy: SaxoPolicy | undefined;
 
-export function loadPolicy(path: string | undefined = process.env.SAXO_POLICY_PATH): SaxoPolicy {
+export function loadPolicy(path: string | undefined = readEnv('SAXO_POLICY_PATH')): SaxoPolicy {
   if (!path) {
     return DEFAULT_POLICY;
   }
@@ -317,5 +318,5 @@ export function checkMultiLegOrder(input: MultiLegPolicyInput, policy: SaxoPolic
 }
 
 export function isLiveTradingEnabled(): boolean {
-  return (process.env.SAXO_ENABLE_LIVE_TRADING ?? 'false').trim().toLowerCase() === 'true';
+  return readBoolEnv('SAXO_ENABLE_LIVE_TRADING', false);
 }

@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-19
+
+Hot-fix release. The MCPB bundle in 0.1.1 was unusable from Claude
+Desktop because Claude Desktop substitutes `${user_config.NAME}` in
+the spawned env block **only for user_config fields the user filled
+in**. Optional fields the user left blank were passed through to the
+child process as the literal template string. The server then tried
+to use those literal strings as paths, tokens, and booleans — first
+casualty was `saxo_diagnostics` blowing up because `loadPolicy()`
+tried to `readFileSync('${user_config.SAXO_POLICY_PATH}')`.
+
+### Fixed
+
+- All `process.env.SAXO_*` reads now go through a `readEnv` helper
+  ([src/saxo/env.ts](src/saxo/env.ts)) that treats any value starting
+  with `${user_config.` as unset. Affects `loadPolicy`,
+  `writeAuditEvent`, `SaxoClient` constructor (access token, refresh
+  token, app key/secret, expires-at, base URL, timeout), OAuth config
+  loading, and the `saxo_diagnostics` aggregator.
+- `readBoolEnv` and `readNumberEnv` variants handle the same edge
+  case for `SAXO_ENABLE_LIVE_TRADING` and `SAXO_TIMEOUT_MS`.
+
+### Tests
+
+- New test block in [test/new-features.test.ts](test/new-features.test.ts)
+  covers `readEnv` / `readBoolEnv` / `readNumberEnv` placeholder
+  handling plus a `loadPolicy` regression test that asserts
+  DEFAULT_POLICY is returned when `SAXO_POLICY_PATH` is the literal
+  unresolved string.
+
 ## [0.1.1] - 2026-05-19
 
 Patch release that bundles the multi-leg option-strategy work plus the
@@ -249,6 +279,7 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Borgels/mcp-server-saxo/releases/tag/v0.1.0

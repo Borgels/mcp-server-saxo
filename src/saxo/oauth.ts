@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { exchangeCodeForTokens, type SaxoTokenSet } from './auth.js';
+import { readEnv } from './env.js';
 import {
   getEnvironmentEndpoints,
   resolveEnvironment,
@@ -35,9 +36,9 @@ export interface PendingOauthFlow {
 const flows = new Map<string, PendingOauthFlow>();
 
 export function loadOauthConfigFromEnv(environment?: SaxoEnvironment | string): OauthFlowConfig {
-  const env = resolveEnvironment(environment !== undefined ? String(environment) : process.env.SAXO_ENVIRONMENT);
-  const appKey = process.env.SAXO_APP_KEY;
-  const appSecret = process.env.SAXO_APP_SECRET;
+  const env = resolveEnvironment(environment !== undefined ? String(environment) : readEnv('SAXO_ENVIRONMENT'));
+  const appKey = readEnv('SAXO_APP_KEY');
+  const appSecret = readEnv('SAXO_APP_SECRET');
   if (!appKey || !appSecret) {
     throw new Error(
       'OAuth requires SAXO_APP_KEY and SAXO_APP_SECRET in the MCP server environment.',
@@ -47,7 +48,7 @@ export function loadOauthConfigFromEnv(environment?: SaxoEnvironment | string): 
   // "Invalid value of redirect_uri parameter. It must be an absolute uri",
   // so the default uses the localhost hostname. The registered URL in the
   // Saxo app config must match exactly.
-  const redirectUri = process.env.SAXO_REDIRECT_URI ?? 'http://localhost:8765/callback';
+  const redirectUri = readEnv('SAXO_REDIRECT_URI') ?? 'http://localhost:8765/callback';
   return { environment: env, appKey, appSecret, redirectUri };
 }
 

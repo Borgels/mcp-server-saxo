@@ -1,5 +1,6 @@
 import { SaxoHttpError } from '../errors.js';
 import { refreshAccessToken, type SaxoTokenSet } from './auth.js';
+import { readEnv, readNumberEnv } from './env.js';
 import {
   getEnvironmentEndpoints,
   resolveEnvironment,
@@ -34,27 +35,26 @@ export class SaxoClient {
 
   constructor(options: SaxoClientOptions = {}) {
     this.environment = resolveEnvironment(
-      options.environment !== undefined ? String(options.environment) : process.env.SAXO_ENVIRONMENT,
+      options.environment !== undefined ? String(options.environment) : readEnv('SAXO_ENVIRONMENT'),
     );
     const endpoints = getEnvironmentEndpoints(this.environment);
 
-    this.accessToken = options.accessToken ?? process.env.SAXO_ACCESS_TOKEN ?? undefined;
-    this.refreshToken = options.refreshToken ?? process.env.SAXO_REFRESH_TOKEN ?? undefined;
-    this.appKey = options.appKey ?? process.env.SAXO_APP_KEY ?? undefined;
-    this.appSecret = options.appSecret ?? process.env.SAXO_APP_SECRET ?? undefined;
-    this.accessTokenExpiresAt = parseExpiry(process.env.SAXO_TOKEN_EXPIRES_AT);
+    this.accessToken = options.accessToken ?? readEnv('SAXO_ACCESS_TOKEN');
+    this.refreshToken = options.refreshToken ?? readEnv('SAXO_REFRESH_TOKEN');
+    this.appKey = options.appKey ?? readEnv('SAXO_APP_KEY');
+    this.appSecret = options.appSecret ?? readEnv('SAXO_APP_SECRET');
+    this.accessTokenExpiresAt = parseExpiry(readEnv('SAXO_TOKEN_EXPIRES_AT'));
     if (this.accessTokenExpiresAt === undefined && this.accessToken) {
       this.accessTokenExpiresAt = expiryFromJwt(this.accessToken);
     }
 
     this.baseUrl = trimTrailingSlash(
-      options.baseUrl ?? process.env.SAXO_BASE_URL ?? endpoints.apiBase,
+      options.baseUrl ?? readEnv('SAXO_BASE_URL') ?? endpoints.apiBase,
     );
     assertSafeBaseUrl(this.baseUrl);
 
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs =
-      options.timeoutMs ?? Number(process.env.SAXO_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs = options.timeoutMs ?? readNumberEnv('SAXO_TIMEOUT_MS', 30_000);
   }
 
   isLive(): boolean {
