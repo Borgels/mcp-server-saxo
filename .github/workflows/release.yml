@@ -1,0 +1,100 @@
+name: Release
+
+# Push a tag like `v0.1.1` (or `v0.1.1-rc.1` for a pre-release) to
+# trigger this. Publishes the package to npm as @borgels/mcp-server-saxo
+# and creates a GitHub Release with the .mcpb bundle attached.
+#
+# Required repo secrets:
+#   NPM_TOKEN  — npm automation token with publish access to @borgels/*
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://registry.npmjs.org/'
+
+      - run: npm ci
+
+      - name: Verify tag matches package.json
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          # Strip any pre-release suffix (e.g. -rc.1) for the match
+          BASE_TAG_VERSION="${TAG_VERSION%%-*}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ] && [ "$PKG_VERSION" != "$BASE_TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION / $BASE_TAG_VERSION)"
+            exit 1
+          fi
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Validate MCPB manifest
+        run: npx mcpb validate manifest.json
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG entry for $VERSION; using a placeholder." > release-notes.md
+            echo "" >> release-notes.md
+            echo "See [CHANGELOG.md](CHANGELOG.md) for details." >> release-notes.md
+          fi
+
+      - name: Determine release type
+        id: rel
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Publish to npm BEFORE rebuilding node_modules — `prepack`
+      # runs typecheck + test + build, which need devDependencies.
+      - name: Publish to npm
+        run: npm publish --access public --tag "${{ steps.rel.outputs.npm_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Reinstall with --omit=dev so the .mcpb only includes runtime
+      # deps. mcpb is no longer in node_modules; pull a fresh copy via
+      # npx -p so the bundle's own node_modules stays clean.
+      - name: Pack MCPB bundle (with prod-only deps)
+        run: |
+          rm -rf node_modules
+          npm ci --omit=dev
+          npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb pack . "mcp-server-saxo-${GITHUB_REF_NAME}.mcpb"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          prerelease: ${{ steps.rel.outputs.prerelease }}
+          files: |
+            mcp-server-saxo-${{ github.ref_name }}.mcpb

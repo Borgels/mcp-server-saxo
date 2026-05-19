@@ -145,29 +145,35 @@ authorize endpoint with a PKCE challenge, and writes
 The MCP server only listens on loopback (`127.0.0.1`) for the callback, so the
 flow never touches the public network beyond Saxo itself.
 
-## Connecting an MCP Client
+## Install
 
-This server speaks the standard Model Context Protocol over two
-transports — pick whichever your client supports:
+The server is published as **`@borgels/mcp-server-saxo`** on npm and
+as an **`.mcpb` bundle** (MCP Bundle, the new name for DXT) on each
+[GitHub Release](https://github.com/Borgels/mcp-server-saxo/releases).
+The protocol layer is the same everywhere — stdio + MCP JSON-RPC. The
+table below is just the per-client config syntax.
 
-- **stdio** (recommended for local clients): entry point at
-  `dist/transports/stdio.js`. Run `npm run build` once to produce it.
-- **Streamable HTTP**: entry point at `dist/transports/http.js`. See
-  [Optional HTTP Server](#optional-http-server) below.
+| Client | How to install |
+| --- | --- |
+| **Claude Desktop (1.8089+)** | Download `mcp-server-saxo-v<version>.mcpb` from the latest [Release](https://github.com/Borgels/mcp-server-saxo/releases), then **Settings → Connectors → Install from file**. Claude Desktop prompts you for the SAXO_* config values from the bundle's user_config schema. |
+| **Claude Desktop (legacy `claude_desktop_config.json`)** | Add the [universal JSON block](#universal-config) to `%APPDATA%\Claude\claude_desktop_config.json` under `mcpServers`. Restart fully (File → Exit). |
+| **Claude Code (CLI)** | `claude mcp add saxo -- npx -y @borgels/mcp-server-saxo` (or edit `~/.claude/mcp.json` / per-project `.mcp.json`). |
+| **Cursor** | Settings → MCP → Add server, or `.cursor/mcp.json` per project. Same JSON shape as below. |
+| **Codex (OpenAI)** | `~/.codex/config.toml`: `[mcp_servers.saxo]` with `command = "npx"`, `args = ["-y", "@borgels/mcp-server-saxo"]`, `env = { SAXO_ENVIRONMENT = "sim", ... }`. |
+| **Windsurf / Cline / Zed / continue.dev** | Settings UI, point at `npx -y @borgels/mcp-server-saxo`. Same JSON envelope. |
+| **MCP Inspector (debug)** | `npx @modelcontextprotocol/inspector npx -y @borgels/mcp-server-saxo` |
+| **Self-host (any client)** | `command: "node", args: ["/absolute/path/to/dist/transports/stdio.js"]`. Use double backslashes on Windows or forward slashes. |
 
-Any MCP-compatible client (Claude Desktop, Claude Code, Cursor, MCP
-Inspector, custom SDK clients, etc.) configures it the same way: as an
-entry in the client's `mcpServers` map with `command`, `args`, and
-`env`. The shape below is the MCP convention.
+### Universal config
 
-### Minimal config — 24h SIM token
+For any client that uses the standard `mcpServers` config schema:
 
 ```json
 {
   "mcpServers": {
     "saxo": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-server-saxo/dist/transports/stdio.js"],
+      "command": "npx",
+      "args": ["-y", "@borgels/mcp-server-saxo"],
       "env": {
         "SAXO_ENVIRONMENT": "sim",
         "SAXO_ACCESS_TOKEN": "your-24h-sim-token"
@@ -177,18 +183,17 @@ entry in the client's `mcpServers` map with `command`, `args`, and
 }
 ```
 
-### Durable config — OAuth with refresh
-
-After running `npm run auth -- --env sim` once (see Quickstart Path B),
-copy the resulting credentials into the env block. The server will
-refresh access tokens automatically — no daily re-paste.
+That's the **minimal** form — fine for a quick SIM test. For durable
+use (no daily token paste), do the OAuth dance once with
+`npm run auth -- --env sim` against a clone of this repo, then copy
+the resulting OAuth env vars into the block:
 
 ```json
 {
   "mcpServers": {
     "saxo": {
-      "command": "node",
-      "args": ["/absolute/path/to/mcp-server-saxo/dist/transports/stdio.js"],
+      "command": "npx",
+      "args": ["-y", "@borgels/mcp-server-saxo"],
       "env": {
         "SAXO_ENVIRONMENT": "sim",
         "SAXO_APP_KEY": "...",
@@ -208,44 +213,37 @@ the JWT `exp`, detects it's within 60s of expiry, and runs the
 refresh-token grant before sending the first request. The refresh
 token is what really matters at cold start.
 
-### Dev mode (live source, no rebuild on edits)
+### Restart after editing
 
-```json
-{
-  "command": "npm",
-  "args": ["run", "dev", "--prefix", "/absolute/path/to/mcp-server-saxo"],
-  "env": { "SAXO_ENVIRONMENT": "sim", "SAXO_ACCESS_TOKEN": "..." }
-}
-```
-
-### Path escaping
-
-On Windows, use double backslashes inside JSON strings or forward
-slashes:
-
-```json
-"args": ["C:\\path\\to\\mcp-server-saxo\\dist\\transports\\stdio.js"]
-"args": ["C:/path/to/mcp-server-saxo/dist/transports/stdio.js"]
-```
-
-### After editing the config
-
-Restart your MCP client. Most clients spawn their MCP server processes
-only at startup, so config changes don't take effect until the client
-fully exits and reopens (note: some clients keep running in the system
-tray when the window is closed — make sure to actually quit).
+Most MCP clients spawn server processes only at startup. After editing
+the client's config, fully quit and reopen it. Some clients (notably
+Claude Desktop) keep running in the system tray when the window is
+closed — make sure you actually exit before reopening.
 
 ### Troubleshooting
 
 - If the server doesn't appear in the client's tool list, check the
   client's MCP logs (each client documents its log location).
-- Verify the path in `args` is reachable: from a fresh shell, `node
-  /absolute/path/to/dist/transports/stdio.js` should start and wait
-  for stdin without error.
+- Verify `npx -y @borgels/mcp-server-saxo` runs from a fresh shell — it
+  should start, register tools, and wait for stdin without error.
 - Once connected, call `saxo_diagnostics` first when something looks
   off — its `warnings[]` array surfaces missing market-data terms,
   near-expiry tokens, `DataLevel` not Realtime, and live env without
   `SAXO_ENABLE_LIVE_TRADING`.
+
+### Building from source (for hacking or before npm publish)
+
+```sh
+git clone https://github.com/Borgels/mcp-server-saxo.git
+cd mcp-server-saxo
+npm install
+npm run build           # produces dist/transports/stdio.js
+npm test                # 69 tests
+```
+
+Use `"command": "node", "args": ["/absolute/path/to/dist/transports/stdio.js"]`
+in your client config to point at the built source. For the MCPB bundle,
+`npm run mcpb:pack` produces `mcp-server-saxo.mcpb` in the project root.
 
 ## Start Here
 

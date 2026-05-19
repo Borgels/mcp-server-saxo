@@ -1,11 +1,12 @@
 {
-  "name": "mcp-server-saxo",
+  "name": "@borgels/mcp-server-saxo",
   "version": "0.1.1",
   "description": "MCP server for the Saxo Bank OpenAPI (SIM and LIVE trading).",
   "type": "module",
-  "main": "./dist/stdio.js",
+  "main": "./dist/transports/stdio.js",
   "files": [
     "dist",
+    "manifest.json",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
@@ -13,7 +14,7 @@
     "policy.example.json"
   ],
   "bin": {
-    "mcp-server-saxo": "./dist/stdio.js"
+    "mcp-server-saxo": "./dist/transports/stdio.js"
   },
   "scripts": {
     "build": "tsup src/transports/stdio.ts src/transports/http.ts src/bin/auth.ts --format esm --dts --clean --sourcemap",
@@ -23,7 +24,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepack": "npm run typecheck && npm test && npm run build",
-    "smoke:live": "tsx test/live-smoke.ts"
+    "smoke:live": "tsx test/live-smoke.ts",
+    "mcpb:validate": "mcpb validate manifest.json",
+    "mcpb:pack": "mcpb pack . mcp-server-saxo.mcpb"
   },
   "repository": {
     "type": "git",
@@ -31,15 +34,21 @@
   },
   "keywords": [
     "mcp",
+    "model-context-protocol",
     "saxo",
     "saxobank",
     "trading",
-    "openapi"
+    "openapi",
+    "borgels"
   ],
-  "author": "",
+  "author": "Borgels",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=20.11"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   },
   "bugs": {
     "url": "https://github.com/Borgels/mcp-server-saxo/issues"
@@ -55,6 +64,7 @@
     "fast-uri": ">=3.1.2"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^25.7.0",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",

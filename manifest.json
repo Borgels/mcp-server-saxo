@@ -1,0 +1,134 @@
+{
+  "manifest_version": "0.3",
+  "name": "mcp-server-saxo",
+  "display_name": "Saxo Bank OpenAPI",
+  "version": "0.1.1",
+  "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
+  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. 30 tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, single-leg and multi-leg option orders, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
+  "author": {
+    "name": "Borgels",
+    "url": "https://github.com/Borgels"
+  },
+  "homepage": "https://github.com/Borgels/mcp-server-saxo#readme",
+  "documentation": "https://github.com/Borgels/mcp-server-saxo#readme",
+  "support": "https://github.com/Borgels/mcp-server-saxo/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Borgels/mcp-server-saxo.git"
+  },
+  "license": "Apache-2.0",
+  "keywords": [
+    "saxo",
+    "saxobank",
+    "trading",
+    "options",
+    "openapi",
+    "finance",
+    "stocks"
+  ],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20.11"
+    }
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/transports/stdio.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/transports/stdio.js"],
+      "env": {
+        "SAXO_ENVIRONMENT": "${user_config.SAXO_ENVIRONMENT}",
+        "SAXO_ACCESS_TOKEN": "${user_config.SAXO_ACCESS_TOKEN}",
+        "SAXO_REFRESH_TOKEN": "${user_config.SAXO_REFRESH_TOKEN}",
+        "SAXO_TOKEN_EXPIRES_AT": "${user_config.SAXO_TOKEN_EXPIRES_AT}",
+        "SAXO_APP_KEY": "${user_config.SAXO_APP_KEY}",
+        "SAXO_APP_SECRET": "${user_config.SAXO_APP_SECRET}",
+        "SAXO_REDIRECT_URI": "${user_config.SAXO_REDIRECT_URI}",
+        "SAXO_TIMEOUT_MS": "${user_config.SAXO_TIMEOUT_MS}",
+        "SAXO_ENABLE_LIVE_TRADING": "${user_config.SAXO_ENABLE_LIVE_TRADING}",
+        "SAXO_POLICY_PATH": "${user_config.SAXO_POLICY_PATH}",
+        "SAXO_AUDIT_LOG": "${user_config.SAXO_AUDIT_LOG}"
+      }
+    }
+  },
+  "user_config": {
+    "SAXO_ENVIRONMENT": {
+      "type": "string",
+      "title": "Environment",
+      "description": "sim (simulation) or live. Defaults to sim. LIVE writes additionally require SAXO_ENABLE_LIVE_TRADING=true and a policy.json that allows live writes.",
+      "required": false,
+      "default": "sim"
+    },
+    "SAXO_ACCESS_TOKEN": {
+      "type": "string",
+      "title": "Access token",
+      "description": "Bearer token. For quick SIM testing paste a 24-hour token from https://www.developer.saxo. For durable use (recommended) leave blank and fill in the OAuth fields below — the server will mint and refresh tokens.",
+      "required": false,
+      "sensitive": true
+    },
+    "SAXO_REFRESH_TOKEN": {
+      "type": "string",
+      "title": "Refresh token",
+      "description": "OAuth refresh token. Required for durable runs longer than the access token's TTL (~20 minutes on SIM). Obtain with `npm run auth` against the source repo, or via the saxo_oauth_start / saxo_oauth_complete tools.",
+      "required": false,
+      "sensitive": true
+    },
+    "SAXO_TOKEN_EXPIRES_AT": {
+      "type": "string",
+      "title": "Access-token expiry (ISO 8601)",
+      "description": "Optional. If set, lets the client refresh proactively. Otherwise computed from the JWT exp claim.",
+      "required": false
+    },
+    "SAXO_APP_KEY": {
+      "type": "string",
+      "title": "App key",
+      "description": "OAuth application key from developer.saxo. Required when using OAuth refresh.",
+      "required": false,
+      "sensitive": true
+    },
+    "SAXO_APP_SECRET": {
+      "type": "string",
+      "title": "App secret",
+      "description": "OAuth application secret. Required when using OAuth refresh.",
+      "required": false,
+      "sensitive": true
+    },
+    "SAXO_REDIRECT_URI": {
+      "type": "string",
+      "title": "OAuth redirect URI",
+      "description": "Loopback URI registered in the Saxo app. Must use the hostname `localhost` (Saxo rejects IP-literal redirects). Only used by the saxo_oauth_* tools.",
+      "required": false,
+      "default": "http://localhost:8765/callback"
+    },
+    "SAXO_TIMEOUT_MS": {
+      "type": "number",
+      "title": "Request timeout (ms)",
+      "description": "HTTP timeout for Saxo OpenAPI calls.",
+      "required": false,
+      "default": 30000,
+      "min": 1000,
+      "max": 120000
+    },
+    "SAXO_ENABLE_LIVE_TRADING": {
+      "type": "boolean",
+      "title": "Enable LIVE trading",
+      "description": "Master switch for LIVE order writes. Must also be allowed in policy.json. Leave false for SIM-only use.",
+      "required": false,
+      "default": false
+    },
+    "SAXO_POLICY_PATH": {
+      "type": "file",
+      "title": "policy.json path",
+      "description": "Optional. Path to a policy.json that constrains which AccountKeys, AssetTypes, Uics, and notionals are tradable. See policy.example.json in the source repo.",
+      "required": false
+    },
+    "SAXO_AUDIT_LOG": {
+      "type": "file",
+      "title": "Audit log path",
+      "description": "Optional. Writes JSONL audit events for every tool call (start, finish, error, policy denial). Inputs are SHA-256 hashed.",
+      "required": false
+    }
+  }
+}

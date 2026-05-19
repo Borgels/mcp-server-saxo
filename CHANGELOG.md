@@ -11,8 +11,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Patch release that bundles the multi-leg option-strategy work plus the
 bug fixes and ergonomics improvements discovered when v0.1.0 was first
-exercised against the live Saxo SIM gateway. Nothing was released
-between 0.1.0 and 0.1.1.
+exercised against the live Saxo SIM gateway, plus the distribution
+infrastructure needed to install across MCP clients. Nothing was
+released between 0.1.0 and 0.1.1.
+
+### Distribution
+
+- Published to npm under the **`@borgels/`** scope:
+  `@borgels/mcp-server-saxo`. Adopts the Borgels MCP server family
+  convention. Use `npx -y @borgels/mcp-server-saxo` from any MCP
+  client that speaks the standard `mcpServers` config shape.
+- Ships an **MCPB bundle** (MCP Bundle — Anthropic's renamed DXT
+  format) `mcp-server-saxo-v<version>.mcpb` attached to every GitHub
+  Release. Current Claude Desktop builds (1.8089+) install this via
+  Settings → Connectors → Install from file. The bundle's
+  `user_config` schema prompts the user for SAXO_* credentials at
+  install time, with `sensitive: true` on the tokens.
+- Added [`.github/workflows/release.yml`](.github/workflows/release.yml).
+  On `git push --tags vX.Y.Z`: typecheck + test + build, validate
+  manifest, pack `.mcpb`, publish to npm with `--access public`,
+  create a GitHub Release with the `.mcpb` attached and the CHANGELOG
+  section as the release body. Pre-release tags
+  (e.g. `v0.1.1-rc.1`) publish under the `next` dist-tag.
 
 ### Fixed
 
@@ -39,6 +59,10 @@ between 0.1.0 and 0.1.1.
   Windows and attaches an explicit `.on('error')` handler that swallows
   the failure so the OAuth listener keeps running even if no browser
   can be opened.
+- `package.json` `main` and `bin` paths corrected from
+  `./dist/stdio.js` (which never existed) to
+  `./dist/transports/stdio.js`. The old paths would have broken any
+  `npm install -g`, `npx`, or library import.
 - MCP `serverInfo.version` now tracks `package.json` instead of being
   hardcoded. 0.1.0 was reported on the wire as the server version even
   in post-bump builds. `createServer` now reads the nearest
