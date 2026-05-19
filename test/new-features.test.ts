@@ -304,6 +304,25 @@ describe('getInfoPrice annotates NoAccess responses', () => {
   });
 });
 
+describe('createServer reports package.json version', () => {
+  it('serverInfo.version matches package.json', async () => {
+    const { createServer } = await import('../src/server.js');
+    const pkg = JSON.parse(
+      await (await import('node:fs/promises')).readFile(
+        new URL('../package.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { version: string };
+    const server = createServer();
+    // McpServer exposes serverInfo via the SDK's internal handler. We
+    // check the canonical field that gets sent on initialize.
+    const info = (server as unknown as { server: { _serverInfo: { name: string; version: string } } })
+      .server._serverInfo;
+    expect(info.name).toBe('saxo');
+    expect(info.version).toBe(pkg.version);
+  });
+});
+
 describe('inspectAccessToken', () => {
   it('decodes a Saxo-style JWT exp claim', () => {
     const payload = { exp: '2147483647', iss: 'oa' };

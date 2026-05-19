@@ -39,6 +39,13 @@ between 0.1.0 and 0.1.1.
   Windows and attaches an explicit `.on('error')` handler that swallows
   the failure so the OAuth listener keeps running even if no browser
   can be opened.
+- MCP `serverInfo.version` now tracks `package.json` instead of being
+  hardcoded. 0.1.0 was reported on the wire as the server version even
+  in post-bump builds. `createServer` now reads the nearest
+  `package.json` at module load, walking up from the source file, so
+  this works in both source (tsx) and bundled (tsup dist) modes. New
+  unit test asserts the wire version matches `package.json` so future
+  bumps stay in sync.
 - Default `SAXO_REDIRECT_URI` changed from
   `http://127.0.0.1:8765/callback` to `http://localhost:8765/callback`.
   Saxo's authorize endpoint rejects IP-literal redirects with
