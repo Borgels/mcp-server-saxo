@@ -49,6 +49,7 @@ describe('Saxo tool registration', () => {
       'saxo_search_instruments',
       'saxo_get_instrument_details',
       'saxo_list_exchanges',
+      'saxo_get_option_chain',
       'saxo_get_infoprice',
       'saxo_get_infoprices_list',
       'saxo_get_chart',
@@ -62,6 +63,10 @@ describe('Saxo tool registration', () => {
       'saxo_place_order',
       'saxo_modify_order',
       'saxo_cancel_order',
+      'saxo_precheck_multileg_order',
+      'saxo_place_multileg_order',
+      'saxo_modify_multileg_order',
+      'saxo_cancel_multileg_order',
       'saxo_oauth_start',
       'saxo_oauth_complete',
       'saxo_oauth_cancel',
@@ -74,6 +79,7 @@ describe('Saxo tool registration', () => {
       'saxo_search_instruments',
       'saxo_get_instrument_details',
       'saxo_list_exchanges',
+      'saxo_get_option_chain',
       'saxo_get_infoprice',
       'saxo_get_infoprices_list',
       'saxo_get_chart',
@@ -96,6 +102,10 @@ describe('Saxo tool registration', () => {
       'saxo_place_order',
       'saxo_modify_order',
       'saxo_cancel_order',
+      'saxo_precheck_multileg_order',
+      'saxo_place_multileg_order',
+      'saxo_modify_multileg_order',
+      'saxo_cancel_multileg_order',
       'saxo_oauth_start',
       'saxo_oauth_complete',
       'saxo_oauth_cancel',
@@ -140,6 +150,34 @@ describe('Saxo tool registration', () => {
         Amount: 1,
         OrderType: 'Market',
         OrderDuration: { DurationType: 'DayOrder' },
+      }),
+    ).rejects.toThrow(/SAXO_ENABLE_LIVE_TRADING/);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('saxo_place_multileg_order on LIVE throws before any fetch when SAXO_ENABLE_LIVE_TRADING is unset', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}'));
+    const client = new SaxoClient({
+      environment: 'live',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const registered = captureRegisteredTools(client);
+
+    const tool = registered.saxo_place_multileg_order;
+    if (!tool) throw new Error('saxo_place_multileg_order not registered');
+
+    await expect(
+      tool.handler({
+        AccountKey: 'k',
+        OrderType: 'Limit',
+        OrderPrice: 1.08,
+        OrderDuration: { DurationType: 'GoodTillCancel' },
+        Legs: [
+          { Uic: 14853018, AssetType: 'StockOption', BuySell: 'Buy', Amount: 1, ToOpenClose: 'ToOpen' },
+          { Uic: 14853056, AssetType: 'StockOption', BuySell: 'Sell', Amount: 1, ToOpenClose: 'ToOpen' },
+        ],
       }),
     ).rejects.toThrow(/SAXO_ENABLE_LIVE_TRADING/);
 

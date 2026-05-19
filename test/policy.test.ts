@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SaxoPolicyDeniedError } from '../src/errors.js';
 import {
+  checkMultiLegOrder,
   checkOrder,
   checkToolAllowed,
   DEFAULT_POLICY,
@@ -152,5 +153,119 @@ describe('Saxo policy.checkOrder', () => {
     expect(() => checkOrder({ Amount: 100, OrderPrice: 20 }, policy)).toThrow(SaxoPolicyDeniedError);
     expect(() => checkOrder({ Amount: 10, OrderPrice: 20 }, policy)).not.toThrow();
     expect(() => checkOrder({ Amount: 100 }, policy)).not.toThrow();
+  });
+});
+
+describe('Saxo policy.checkMultiLegOrder', () => {
+  it('allows a permissive default policy with valid legs', () => {
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          AccountKey: 'k',
+          OrderPrice: 1.08,
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', Amount: 150 },
+            { Uic: 2, AssetType: 'StockOption', Amount: 150 },
+          ],
+        },
+        DEFAULT_POLICY,
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects per-leg AssetType outside allowed_asset_types', () => {
+    const policy: SaxoPolicy = { ...DEFAULT_POLICY, allowed_asset_types: ['StockOption'] };
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', Amount: 1 },
+            { Uic: 2, AssetType: 'IndexOption', Amount: 1 },
+          ],
+        },
+        policy,
+      ),
+    ).toThrow(SaxoPolicyDeniedError);
+  });
+
+  it('rejects per-leg Amount over per-AssetType max_order_amount', () => {
+    const policy: SaxoPolicy = {
+      ...DEFAULT_POLICY,
+      max_order_amount: { default: 10, StockOption: 100 },
+    };
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', Amount: 200 },
+            { Uic: 2, AssetType: 'StockOption', Amount: 150 },
+          ],
+        },
+        policy,
+      ),
+    ).toThrow(SaxoPolicyDeniedError);
+
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', Amount: 50 },
+            { Uic: 2, AssetType: 'StockOption', Amount: 50 },
+          ],
+        },
+        policy,
+      ),
+    ).not.toThrow();
+  });
+
+  it('rejects denied Uic in any leg', () => {
+    const policy: SaxoPolicy = { ...DEFAULT_POLICY, denied_uics: [14853056] };
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          Legs: [
+            { Uic: 14853018, AssetType: 'StockOption', Amount: 1 },
+            { Uic: 14853056, AssetType: 'StockOption', Amount: 1 },
+          ],
+        },
+        policy,
+      ),
+    ).toThrow(SaxoPolicyDeniedError);
+  });
+
+  it('rejects when notional (OrderPrice * largest leg) exceeds max_notional', () => {
+    const policy: SaxoPolicy = { ...DEFAULT_POLICY, max_notional: 100 };
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          OrderPrice: 1.08,
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', Amount: 150 },
+            { Uic: 2, AssetType: 'StockOption', Amount: 150 },
+          ],
+        },
+        policy,
+      ),
+    ).toThrow(SaxoPolicyDeniedError);
+  });
+
+  it('allows write tools on SIM for multi-leg', () => {
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_place_multileg_order',
+        environment: 'sim',
+        liveTradingEnabled: false,
+      }),
+    ).toMatchObject({ allowed: true });
+  });
+
+  it('denies multi-leg writes on LIVE without SAXO_ENABLE_LIVE_TRADING', () => {
+    const decision = checkToolAllowed({
+      tool: 'saxo_place_multileg_order',
+      environment: 'live',
+      liveTradingEnabled: false,
+    });
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toMatch(/SAXO_ENABLE_LIVE_TRADING/);
   });
 });

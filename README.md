@@ -157,6 +157,7 @@ rules.
 | `saxo_search_instruments` | `GET /ref/v1/instruments` | Search by keyword + asset type. |
 | `saxo_get_instrument_details` | `GET /ref/v1/instruments/details` | Detailed metadata for one or many Uics. |
 | `saxo_list_exchanges` | `GET /ref/v1/exchanges` | List exchanges (or one by ExchangeId). |
+| `saxo_get_option_chain` | `GET /ref/v1/instruments/contractoptionspaces/{optionRootId}` | Strikes + expirations for an option root. |
 | `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. |
 | `saxo_get_infoprices_list` | `GET /trade/v1/infoprices/list` | Snapshot prices for multiple Uics. |
 | `saxo_get_chart` | `GET /chart/v3/charts` | Historical OHLC bars (horizon in minutes). |
@@ -175,6 +176,10 @@ rules.
 | `saxo_place_order` | `POST /trade/v2/orders` | LIVE: `SAXO_ENABLE_LIVE_TRADING=true` + `policy.json` allow + optional auto-precheck. |
 | `saxo_modify_order` | `PATCH /trade/v2/orders` | Same as place_order. |
 | `saxo_cancel_order` | `DELETE /trade/v2/orders/{ids}` | Policy + audit. |
+| `saxo_precheck_multileg_order` | `POST /trade/v2/orders/multileg/precheck` | Validate a spread (no execution). |
+| `saxo_place_multileg_order` | `POST /trade/v2/orders/multileg` | Place a spread atomically with a single net debit/credit limit. |
+| `saxo_modify_multileg_order` | `PATCH /trade/v2/orders/multileg` | Adjust spread Amount or OrderPrice. |
+| `saxo_cancel_multileg_order` | `DELETE /trade/v2/orders/multileg/{id}` | Cancel the whole strategy. |
 | `saxo_oauth_start` | OAuth2 PKCE | Loopback redirect only; reads app creds from env. |
 | `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional `.env` persist. |
 | `saxo_oauth_cancel` | — | Closes a pending OAuth listener. |
@@ -198,6 +203,47 @@ related orders (OCO, IfDone, brackets).
   "OrderDuration": { "DurationType": "DayOrder" }
 }
 ```
+
+### Multi-leg option order body
+
+Multi-leg tools wrap Saxo's `/trade/v2/orders/multileg` family. `OrderType`
+must be `Limit`, `OrderPrice` is the per-contract net debit (positive) or
+credit (negative) for the whole strategy, and `Legs[]` accepts 2–20 legs
+that all share the same option root (same underlying + expiry).
+
+```json
+{
+  "AccountKey": "your-account-key",
+  "OrderType": "Limit",
+  "OrderPrice": 1.08,
+  "OrderDuration": { "DurationType": "GoodTillCancel" },
+  "ManualOrder": true,
+  "ExternalReference": "bull-call-spread-1",
+  "Legs": [
+    {
+      "Uic": 14853018,
+      "AssetType": "StockOption",
+      "BuySell": "Buy",
+      "Amount": 150,
+      "ToOpenClose": "ToOpen"
+    },
+    {
+      "Uic": 14853056,
+      "AssetType": "StockOption",
+      "BuySell": "Sell",
+      "Amount": 150,
+      "ToOpenClose": "ToOpen"
+    }
+  ]
+}
+```
+
+Saxo returns a `MultiLegOrderId` plus per-leg `Orders[].OrderId` values.
+Use `saxo_modify_multileg_order` (Amount/OrderPrice only) or
+`saxo_cancel_multileg_order` (cancels the whole strategy) afterwards. To
+find the per-leg Uics, start with `saxo_search_instruments` for the
+underlying, then `saxo_get_option_chain` to read off strikes and
+expirations.
 
 ## LIVE Trading Safety
 

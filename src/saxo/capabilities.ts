@@ -87,6 +87,17 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['exchanges', 'venues', 'mic'],
   },
   {
+    id: 'saxo_get_option_chain',
+    title: 'Get Option Chain',
+    description:
+      'Fetch the option chain (all strikes + expirations) for an option root. Use this to find the Uic of each option leg before placing a multi-leg spread.',
+    risk: 'read',
+    examples: [{ optionRootId: 1009, optionSpaceSegment: 'AllStrikes' }],
+    identifierFormats: ['optionRootId (integer)'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['option', 'chain', 'strikes', 'expiry', 'options'],
+  },
+  {
     id: 'saxo_get_infoprice',
     title: 'Get Snapshot Price',
     description: 'Fetch a snapshot bid/ask/last price for a single instrument.',
@@ -249,6 +260,74 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     identifierFormats: ['OrderId[]'],
     safetyNotes: ['LIVE writes require SAXO_ENABLE_LIVE_TRADING=true.'],
     keywords: ['cancel', 'order', 'delete'],
+  },
+  {
+    id: 'saxo_precheck_multileg_order',
+    title: 'Precheck Multi-Leg Option Order',
+    description:
+      'Validate a multi-leg option strategy (spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is the net debit/credit for the whole strategy.',
+    risk: 'write',
+    examples: [
+      {
+        AccountKey: 'AccountKey...',
+        OrderType: 'Limit',
+        OrderPrice: 1.08,
+        OrderDuration: { DurationType: 'DayOrder' },
+        Legs: [
+          { Uic: 14853018, AssetType: 'StockOption', BuySell: 'Buy', Amount: 1, ToOpenClose: 'ToOpen' },
+          { Uic: 14853056, AssetType: 'StockOption', BuySell: 'Sell', Amount: 1, ToOpenClose: 'ToOpen' },
+        ],
+      },
+    ],
+    identifierFormats: ['Multi-leg body with Legs[] (min 2, max 20)'],
+    safetyNotes: ['Same guards as place_multileg_order. No execution.'],
+    keywords: ['multileg', 'precheck', 'option', 'spread', 'validate'],
+  },
+  {
+    id: 'saxo_place_multileg_order',
+    title: 'Place Multi-Leg Option Order',
+    description:
+      'Place a multi-leg option strategy as one atomic order with a single net-debit/credit limit. All legs must share the same option root. OrderType must be Limit.',
+    risk: 'write',
+    examples: [
+      {
+        AccountKey: 'AccountKey...',
+        OrderType: 'Limit',
+        OrderPrice: 1.08,
+        OrderDuration: { DurationType: 'GoodTillCancel' },
+        Legs: [
+          { Uic: 14853018, AssetType: 'StockOption', BuySell: 'Buy', Amount: 150, ToOpenClose: 'ToOpen' },
+          { Uic: 14853056, AssetType: 'StockOption', BuySell: 'Sell', Amount: 150, ToOpenClose: 'ToOpen' },
+        ],
+      },
+    ],
+    identifierFormats: ['Multi-leg body with Legs[] (min 2, max 20)'],
+    safetyNotes: [
+      'LIVE writes require SAXO_ENABLE_LIVE_TRADING=true + policy.allow_live_writes.',
+      'OrderPrice is per-contract net debit (positive) or credit (negative).',
+    ],
+    keywords: ['multileg', 'place', 'option', 'spread', 'straddle', 'condor', 'vertical'],
+  },
+  {
+    id: 'saxo_modify_multileg_order',
+    title: 'Modify Multi-Leg Option Order',
+    description:
+      'Modify a working multi-leg order. Only Amount (symmetric across legs) and OrderPrice can be changed.',
+    risk: 'write',
+    examples: [{ AccountKey: 'AccountKey...', MultiLegOrderId: '88608648', OrderPrice: 1.15 }],
+    identifierFormats: ['MultiLegOrderId'],
+    safetyNotes: ['Same LIVE guards as place_multileg_order.'],
+    keywords: ['multileg', 'modify', 'change'],
+  },
+  {
+    id: 'saxo_cancel_multileg_order',
+    title: 'Cancel Multi-Leg Option Order',
+    description: 'Cancel a working multi-leg order (cancels the whole strategy, not individual legs).',
+    risk: 'write',
+    examples: [{ multiLegOrderId: '88608648', accountKey: 'AccountKey...' }],
+    identifierFormats: ['MultiLegOrderId'],
+    safetyNotes: ['LIVE writes require SAXO_ENABLE_LIVE_TRADING=true.'],
+    keywords: ['multileg', 'cancel', 'spread'],
   },
   {
     id: 'saxo_oauth_start',

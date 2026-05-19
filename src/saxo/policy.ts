@@ -9,6 +9,7 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_search_instruments',
   'saxo_get_instrument_details',
   'saxo_list_exchanges',
+  'saxo_get_option_chain',
   'saxo_get_infoprice',
   'saxo_get_infoprices_list',
   'saxo_get_chart',
@@ -25,6 +26,10 @@ const WRITE_TOOLS = new Set([
   'saxo_place_order',
   'saxo_modify_order',
   'saxo_cancel_order',
+  'saxo_precheck_multileg_order',
+  'saxo_place_multileg_order',
+  'saxo_modify_multileg_order',
+  'saxo_cancel_multileg_order',
 ]);
 
 const OAUTH_TOOLS = new Set([
@@ -198,6 +203,84 @@ function resolveAmountLimit(
   }
 
   return typeof limits.default === 'number' ? limits.default : undefined;
+}
+
+export interface MultiLegPolicyLeg {
+  Uic?: number;
+  AssetType?: string;
+  Amount?: number;
+  BuySell?: 'Buy' | 'Sell';
+}
+
+export interface MultiLegPolicyInput {
+  AccountKey?: string;
+  OrderPrice?: number;
+  Legs: MultiLegPolicyLeg[];
+}
+
+export function checkMultiLegOrder(input: MultiLegPolicyInput, policy: SaxoPolicy): void {
+  if (input.AccountKey && policy.allowed_account_keys?.length) {
+    if (!policy.allowed_account_keys.includes(input.AccountKey)) {
+      throw new SaxoPolicyDeniedError(
+        'saxo_place_multileg_order',
+        `AccountKey ${input.AccountKey} is not in policy.allowed_account_keys.`,
+      );
+    }
+  }
+
+  let maxLegAmount = 0;
+  for (let i = 0; i < input.Legs.length; i += 1) {
+    const leg = input.Legs[i];
+    if (!leg) {
+      continue;
+    }
+
+    if (leg.AssetType && policy.allowed_asset_types?.length) {
+      if (!policy.allowed_asset_types.includes(leg.AssetType)) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_multileg_order',
+          `Leg ${i} AssetType ${leg.AssetType} is not in policy.allowed_asset_types.`,
+        );
+      }
+    }
+
+    if (leg.Uic !== undefined && policy.denied_uics?.length) {
+      if (policy.denied_uics.includes(leg.Uic)) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_multileg_order',
+          `Leg ${i} Uic ${leg.Uic} is in policy.denied_uics.`,
+        );
+      }
+    }
+
+    if (typeof leg.Amount === 'number' && policy.max_order_amount) {
+      const limit = resolveAmountLimit(leg.AssetType, policy.max_order_amount);
+      if (limit !== undefined && leg.Amount > limit) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_multileg_order',
+          `Leg ${i} Amount ${leg.Amount} exceeds policy max_order_amount (${limit}) for ${leg.AssetType ?? 'default'}.`,
+        );
+      }
+    }
+
+    if (typeof leg.Amount === 'number' && leg.Amount > maxLegAmount) {
+      maxLegAmount = leg.Amount;
+    }
+  }
+
+  if (typeof policy.max_notional === 'number' && typeof input.OrderPrice === 'number' && maxLegAmount > 0) {
+    // For option spreads OrderPrice is a per-contract net debit. The dollar
+    // exposure scales by the contract multiplier (100 for US equity options)
+    // and the largest leg amount. The contract multiplier varies, but using
+    // the raw amount is the conservative lower bound.
+    const notional = input.OrderPrice * maxLegAmount;
+    if (notional > policy.max_notional) {
+      throw new SaxoPolicyDeniedError(
+        'saxo_place_multileg_order',
+        `Notional ${notional} (OrderPrice * largest leg Amount) exceeds policy max_notional (${policy.max_notional}).`,
+      );
+    }
+  }
 }
 
 export function isLiveTradingEnabled(): boolean {

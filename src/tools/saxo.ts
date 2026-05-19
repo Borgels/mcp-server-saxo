@@ -19,6 +19,7 @@ import {
   listPositions,
 } from '../saxo/portfolio.js';
 import {
+  checkMultiLegOrder,
   checkOrder,
   checkToolAllowed,
   isLiveTradingEnabled,
@@ -27,16 +28,23 @@ import {
 } from '../saxo/policy.js';
 import {
   getInstrumentDetails,
+  getOptionChain,
   listExchanges,
   searchInstruments,
 } from '../saxo/reference.js';
 import { getDiagnostics, getSessionMe } from '../saxo/session.js';
 import {
+  cancelMultiLegOrder,
   cancelOrder,
+  modifyMultiLegOrder,
   modifyOrder,
+  placeMultiLegOrder,
   placeOrder,
+  precheckMultiLegOrder,
   precheckOrder,
+  type ModifyMultiLegOrderInput,
   type ModifyOrderInput,
+  type PlaceMultiLegOrderInput,
   type PlaceOrderInput,
 } from '../saxo/trading.js';
 import { resolve } from 'node:path';
@@ -98,6 +106,31 @@ const modifyOrderSchema = z.object({
   OrderPrice: z.number().optional(),
   StopPrice: z.number().optional(),
   OrderDuration: orderDurationSchema.optional(),
+});
+
+const multiLegLegSchema = z.object({
+  Uic: z.number().int().nonnegative(),
+  AssetType: z.enum(['StockOption', 'IndexOption']),
+  BuySell: z.enum(['Buy', 'Sell']),
+  Amount: z.number().int().positive(),
+  ToOpenClose: z.enum(['ToOpen', 'ToClose']),
+});
+
+const multiLegOrderSchema = z.object({
+  AccountKey: z.string().trim().min(1),
+  OrderType: z.literal('Limit'),
+  OrderPrice: z.number().optional(),
+  OrderDuration: orderDurationSchema,
+  Legs: z.array(multiLegLegSchema).min(2).max(20),
+  ManualOrder: z.boolean().optional(),
+  ExternalReference: z.string().trim().optional(),
+});
+
+const modifyMultiLegOrderSchema = z.object({
+  AccountKey: z.string().trim().min(1),
+  MultiLegOrderId: z.string().trim().min(1),
+  Amount: z.number().int().positive().optional(),
+  OrderPrice: z.number().optional(),
 });
 
 export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
@@ -205,6 +238,36 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_list_exchanges', input, async () =>
         jsonToolResult(await listExchanges(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_get_option_chain',
+    {
+      title: 'Get Option Chain',
+      description:
+        'Fetch the option chain (strikes + expirations) for an option root. Use this after saxo_search_instruments with assetTypes=[StockOption] to find the Uic of each option leg before placing a multi-leg spread.',
+      inputSchema: {
+        optionRootId: z.number().int().nonnegative(),
+        expiryDates: z
+          .array(
+            z
+              .string()
+              .trim()
+              .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO 8601 date YYYY-MM-DD.'),
+          )
+          .optional(),
+        optionSpaceSegment: z.enum(['AllStrikes', 'DefaultStrikes', 'SpecificStrikes']).optional(),
+        strikeCount: z.number().int().min(1).max(200).optional(),
+        clientKey: z.string().trim().min(1).optional(),
+        accountKey: z.string().trim().min(1).optional(),
+        trading: z.enum(['AllTrading', 'OnlyTradable']).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_option_chain', input, async () =>
+        jsonToolResult(await getOptionChain(client, input)),
       ),
   );
 
@@ -472,6 +535,80 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 
   server.registerTool(
+    'saxo_precheck_multileg_order',
+    {
+      title: 'Precheck Multi-Leg Option Order',
+      description:
+        'Validate a multi-leg option strategy (vertical/calendar spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is the per-contract net debit (positive) or credit (negative) for the whole strategy. All legs must share the same option root.',
+      inputSchema: multiLegOrderSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_precheck_multileg_order', input, async () => {
+        const order = input as PlaceMultiLegOrderInput;
+        applyMultiLegPolicy(order);
+        return jsonToolResult(await precheckMultiLegOrder(client, order));
+      }),
+  );
+
+  server.registerTool(
+    'saxo_place_multileg_order',
+    {
+      title: 'Place Multi-Leg Option Order',
+      description:
+        'Place a multi-leg option strategy as one atomic order with a single net-debit/credit limit. All legs must share the same option root (same underlying + expiry). OrderType must be Limit. Returns MultiLegOrderId plus per-leg OrderIds.',
+      inputSchema: multiLegOrderSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_place_multileg_order', input, async () => {
+        const order = input as PlaceMultiLegOrderInput;
+        applyMultiLegPolicy(order);
+        await maybeRunMultiLegPrecheck(client, order);
+        return jsonToolResult(await placeMultiLegOrder(client, order));
+      }),
+  );
+
+  server.registerTool(
+    'saxo_modify_multileg_order',
+    {
+      title: 'Modify Multi-Leg Option Order',
+      description:
+        'Modify a working multi-leg order. Only Amount (scaled symmetrically across legs) and OrderPrice can be changed.',
+      inputSchema: modifyMultiLegOrderSchema,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_modify_multileg_order', input, async () => {
+        const order = input as ModifyMultiLegOrderInput;
+        applyMultiLegPolicy({
+          AccountKey: order.AccountKey,
+          OrderPrice: order.OrderPrice,
+          Legs: typeof order.Amount === 'number' ? [{ Amount: order.Amount }] : [],
+        });
+        return jsonToolResult(await modifyMultiLegOrder(client, order));
+      }),
+  );
+
+  server.registerTool(
+    'saxo_cancel_multileg_order',
+    {
+      title: 'Cancel Multi-Leg Option Order',
+      description: 'Cancel a working multi-leg order. Cancels the whole strategy — individual legs cannot be cancelled separately.',
+      inputSchema: {
+        multiLegOrderId: z.string().trim().min(1),
+        accountKey: z.string().trim().min(1),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_cancel_multileg_order', input, async () => {
+        applyMultiLegPolicy({ AccountKey: input.accountKey, Legs: [] });
+        return jsonToolResult(await cancelMultiLegOrder(client, input));
+      }),
+  );
+
+  server.registerTool(
     'saxo_oauth_start',
     {
       title: 'Start Saxo OAuth Login',
@@ -565,6 +702,15 @@ function applyOrderPolicy(order: OrderPolicyInput): void {
   checkOrder(order, policy);
 }
 
+function applyMultiLegPolicy(order: {
+  AccountKey?: string;
+  OrderPrice?: number;
+  Legs: Array<{ Uic?: number; AssetType?: string; Amount?: number; BuySell?: 'Buy' | 'Sell' }>;
+}): void {
+  const policy = loadPolicy();
+  checkMultiLegOrder(order, policy);
+}
+
 async function maybeRunPrecheck(client: SaxoClient, order: PlaceOrderInput): Promise<void> {
   if (!client.isLive()) {
     return;
@@ -576,6 +722,22 @@ async function maybeRunPrecheck(client: SaxoClient, order: PlaceOrderInput): Pro
   }
 
   await precheckOrder(client, order);
+}
+
+async function maybeRunMultiLegPrecheck(
+  client: SaxoClient,
+  order: PlaceMultiLegOrderInput,
+): Promise<void> {
+  if (!client.isLive()) {
+    return;
+  }
+
+  const policy = loadPolicy();
+  if (!policy.require_precheck_on_live) {
+    return;
+  }
+
+  await precheckMultiLegOrder(client, order);
 }
 
 async function runAuditedTool<T>(
@@ -647,7 +809,8 @@ function extractOrderId(result: unknown): string | undefined {
   }
   try {
     const data = JSON.parse(text) as Record<string, unknown>;
-    const orderId = data.OrderId ?? data.OrderID ?? data.orderId;
+    const orderId =
+      data.MultiLegOrderId ?? data.OrderId ?? data.OrderID ?? data.orderId;
     return typeof orderId === 'string' ? orderId : undefined;
   } catch {
     return undefined;
@@ -672,6 +835,13 @@ function auditTarget(input: unknown): unknown {
     amount: value.amount,
     OrderType: value.OrderType,
     OrderDuration: value.OrderDuration,
+    Legs: value.Legs,
+    MultiLegOrderId: value.MultiLegOrderId,
+    multiLegOrderId: value.multiLegOrderId,
+    optionRootId: value.optionRootId,
+    expiryDates: value.expiryDates,
+    optionSpaceSegment: value.optionSpaceSegment,
+    strikeCount: value.strikeCount,
     keywords: value.keywords,
     exchangeId: value.exchangeId,
     horizon: value.horizon,

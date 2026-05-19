@@ -57,3 +57,30 @@ export function listExchanges(client: SaxoClient, input: ListExchangesInput): Pr
     $skip: input.skip,
   });
 }
+
+export interface GetOptionChainInput {
+  optionRootId: number;
+  expiryDates?: string[];
+  optionSpaceSegment?: 'AllStrikes' | 'DefaultStrikes' | 'SpecificStrikes';
+  strikeCount?: number;
+  clientKey?: string;
+  accountKey?: string;
+  trading?: 'AllTrading' | 'OnlyTradable';
+}
+
+export function getOptionChain(
+  client: SaxoClient,
+  input: GetOptionChainInput,
+): Promise<unknown> {
+  return client.get(
+    `/ref/v1/instruments/contractoptionspaces/${encodeURIComponent(input.optionRootId)}`,
+    {
+      ExpiryDates: input.expiryDates?.join(','),
+      OptionSpaceSegment: input.optionSpaceSegment,
+      StrikeCount: input.strikeCount,
+      ClientKey: input.clientKey,
+      AccountKey: input.accountKey,
+      Trading: input.trading,
+    },
+  );
+}

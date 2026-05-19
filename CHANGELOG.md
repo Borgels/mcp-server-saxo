@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-19
+
+Adds multi-leg option strategy orders so vertical/calendar/diagonal call
+and put spreads, condors, butterflies, straddles, and strangles can be
+placed as one atomic order with a single net debit/credit limit, plus an
+option-chain reference tool for finding the per-leg Uics.
+
+### Added
+
+- `saxo_get_option_chain` — `GET /ref/v1/instruments/contractoptionspaces/
+  {optionRootId}`. Resolves all strikes and expirations for an option
+  root, with optional `ExpiryDates`, `StrikeCount`, and `Trading` filters.
+- `saxo_precheck_multileg_order` — `POST /trade/v2/orders/multileg/
+  precheck`. Validates a multi-leg body against Saxo (margin, prices,
+  instrument rules) without placing it. Runs through the policy + audit.
+- `saxo_place_multileg_order` — `POST /trade/v2/orders/multileg`. Places
+  a multi-leg option strategy as one order. `OrderType` must be `Limit`;
+  `OrderPrice` is the per-contract net debit (positive) or credit
+  (negative). `Legs[]` accepts 2–20 legs, each with `Uic`, `AssetType`
+  (`StockOption` or `IndexOption`), `BuySell`, `Amount`, and
+  `ToOpenClose`. Returns Saxo's `MultiLegOrderId` plus per-leg
+  `OrderId`s.
+- `saxo_modify_multileg_order` — `PATCH /trade/v2/orders/multileg`.
+  Adjusts `Amount` (scaled symmetrically across legs) and/or
+  `OrderPrice`.
+- `saxo_cancel_multileg_order` — `DELETE /trade/v2/orders/multileg/
+  {MultiLegOrderId}`. Cancels the whole strategy.
+- Multi-leg policy check (`checkMultiLegOrder`): validates each leg's
+  `AssetType`, `Uic`, and `Amount` against `policy.json`, and the
+  strategy notional (`OrderPrice * largest leg Amount`) against
+  `max_notional`.
+- Audit log now includes `Legs`, `MultiLegOrderId`,
+  `optionRootId`, and option-chain query fields.
+
+### Changed
+
+- `extractOrderId` for the audit log now also picks up
+  `MultiLegOrderId` from successful placements.
+- Tool count in `saxo_capabilities` discovery rises from 22 to 27.
+
 ## [0.1.0] - 2026-05-19
 
 Initial release of the Saxo Bank OpenAPI MCP server. Exposes the Saxo
@@ -69,5 +109,6 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Borgels/mcp-server-saxo/releases/tag/v0.1.0
