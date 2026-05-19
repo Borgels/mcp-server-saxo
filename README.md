@@ -27,29 +27,65 @@ Client Management beyond `accounts/me` are out of scope for v1.
 
 ## Quickstart on SIM
 
-The simplest setup uses a 24-hour SIM access token from the Saxo developer
-portal — no OAuth dance required.
-
 ```sh
 npm install
 npm run build
 cp .env.example .env
 ```
 
+Then pick one of:
+
+### Path A — 24-hour token (quickest, one-shot)
+
 1. Sign up for a free SIM account at <https://www.developer.saxo/>.
-2. In the developer portal go to **App Management → Create application**, mark
-   it as **SIM**, and generate a **24-hour token**.
-3. Paste the token into `.env`:
+2. **App Management → Generate 24-hour token** (no app required).
+3. Paste it into `.env`:
    ```
    SAXO_ENVIRONMENT=sim
    SAXO_ACCESS_TOKEN=...
    ```
-4. Start the server:
-   ```sh
-   npm run dev          # stdio transport
-   # or
-   npm run dev:http     # http://127.0.0.1:3000/mcp
+4. Start the server (see Path A/B `start` block below).
+
+The token expires after 24h; you'll need to repeat step 2 to keep going.
+
+### Path B — OAuth app (refreshes automatically)
+
+For anything you run longer than a day, do the OAuth dance once and let
+the server refresh tokens for you. This is also the path you'll need for
+LIVE.
+
+1. Sign up at <https://www.developer.saxo/>.
+2. **App Management → Create application** (mark as SIM, grant type
+   **Code**, allow trading if you'll be placing orders).
+3. Register the redirect URL **exactly** as
+   `http://localhost:8765/callback`. Saxo rejects IP-literal redirects
+   like `http://127.0.0.1:...` at parse time, so use the hostname.
+4. Put the credentials in `.env`:
    ```
+   SAXO_ENVIRONMENT=sim
+   SAXO_APP_KEY=...
+   SAXO_APP_SECRET=...
+   SAXO_REDIRECT_URI=http://localhost:8765/callback
+   ```
+5. Run the auth CLI:
+   ```sh
+   npm run auth -- --env sim
+   ```
+   This opens your browser to Saxo's authorize page, you click Allow, and
+   the CLI writes `SAXO_ACCESS_TOKEN`, `SAXO_REFRESH_TOKEN`, and
+   `SAXO_TOKEN_EXPIRES_AT` back into `.env`.
+
+The OAuth access token Saxo issues is short-lived (~20 minutes on SIM),
+but `SaxoClient` proactively refreshes it from the refresh token ~60s
+before expiry, so the server stays alive indefinitely.
+
+### Start the server
+
+```sh
+npm run dev          # stdio transport
+# or
+npm run dev:http     # http://127.0.0.1:3000/mcp
+```
 
 ### Market data is a second, separate consent
 
@@ -284,7 +320,7 @@ A copy of `policy.example.json` is included. Supported fields:
 | `allowed_account_keys` | Whitelist of AccountKeys that may be traded. |
 | `denied_uics` | Blocklist of Uics. |
 | `max_order_amount` | Per-AssetType caps; `default` falls back when no specific entry. |
-| `max_notional` | Cap on `Amount * (OrderPrice or StopPrice)`. |
+| `max_notional` | Cap on `Amount * (OrderPrice or StopPrice) * contract_multiplier`. Multiplier is 100 for `StockOption` / `IndexOption` / `StockIndexOption` / `FuturesOption`, 1 otherwise. For multi-leg spreads, applied as `|OrderPrice| * largest leg Amount * multiplier`. |
 
 Even on SIM, all write tools run through the policy check (it just defaults
 to permissive). Use the policy in SIM too if you want predictable limits.
