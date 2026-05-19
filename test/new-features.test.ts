@@ -19,6 +19,64 @@ import {
 } from '../src/saxo/reference.js';
 import { inspectAccessToken } from '../src/saxo/session.js';
 
+describe('Portfolio endpoints auto-resolve ClientKey from session (regression)', () => {
+  it('getBalance falls back to session ClientKey when caller passes only accountKey', async () => {
+    const { getBalance } = await import('../src/saxo/portfolio.js');
+    const calls: string[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const u = String(url);
+      calls.push(u);
+      if (u.includes('/port/v1/users/me')) {
+        return new Response(JSON.stringify({ ClientKey: 'CK_FROM_SESSION' }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ CashAvailableForTrading: 42, Currency: 'EUR' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const bal = (await getBalance(client, { accountKey: 'AK_USER_SUPPLIED' })) as {
+      CashAvailableForTrading: number;
+    };
+    expect(bal.CashAvailableForTrading).toBe(42);
+    // Confirm both the session call and the balances call happened, with the
+    // session-derived ClientKey forwarded to /port/v1/balances.
+    const balanceCall = calls.find(u => u.includes('/balances'));
+    expect(balanceCall).toMatch(/ClientKey=CK_FROM_SESSION/);
+    expect(balanceCall).toMatch(/AccountKey=AK_USER_SUPPLIED/);
+  });
+
+  it('caches the resolved ClientKey across calls', async () => {
+    const { getBalance, listPositions } = await import('../src/saxo/portfolio.js');
+    let meCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const u = String(url);
+      if (u.includes('/port/v1/users/me')) {
+        meCalls++;
+        return new Response(JSON.stringify({ ClientKey: 'CK1' }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ Data: [] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    await getBalance(client, { accountKey: 'AK' });
+    await listPositions(client, { accountKey: 'AK' });
+    expect(meCalls).toBe(1); // not 2 — cached
+  });
+});
+
 describe('readEnv treats MCPB unresolved placeholders as unset', () => {
   const KEY = 'SAXO_TEST_PLACEHOLDER_KEY';
   it('returns undefined when value is literal ${user_config.NAME}', async () => {

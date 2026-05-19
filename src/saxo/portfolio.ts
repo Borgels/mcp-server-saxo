@@ -23,10 +23,14 @@ export interface GetBalanceInput {
   clientKey?: string;
 }
 
-export function getBalance(client: SaxoClient, input: GetBalanceInput): Promise<unknown> {
+export async function getBalance(client: SaxoClient, input: GetBalanceInput): Promise<unknown> {
+  // Saxo's /port/v1/balances requires ClientKey even when AccountKey is
+  // supplied. Most callers (especially LLM drivers) only pass AccountKey.
+  // Fall back to the session ClientKey to avoid a confusing 400.
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
   return client.get('/port/v1/balances', {
     AccountKey: input.accountKey,
-    ClientKey: input.clientKey,
+    ClientKey: clientKey,
   });
 }
 
@@ -38,20 +42,23 @@ export interface ListPositionsInput {
   fieldGroups?: string[];
 }
 
-export function listPositions(client: SaxoClient, input: ListPositionsInput): Promise<unknown> {
-  const query = {
-    ClientKey: input.clientKey,
+export async function listPositions(client: SaxoClient, input: ListPositionsInput): Promise<unknown> {
+  // /me works without keys; the explicit endpoint requires ClientKey.
+  if (!input.clientKey && !input.accountKey) {
+    return client.get('/port/v1/positions/me', {
+      $top: input.top,
+      $skip: input.skip,
+      FieldGroups: input.fieldGroups?.join(','),
+    });
+  }
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
+  return client.get('/port/v1/positions', {
+    ClientKey: clientKey,
     AccountKey: input.accountKey,
     $top: input.top,
     $skip: input.skip,
     FieldGroups: input.fieldGroups?.join(','),
-  };
-
-  if (input.clientKey || input.accountKey) {
-    return client.get('/port/v1/positions', query);
-  }
-
-  return client.get('/port/v1/positions/me', query);
+  });
 }
 
 export interface ListClosedPositionsInput {
@@ -63,12 +70,21 @@ export interface ListClosedPositionsInput {
   toDate?: string;
 }
 
-export function listClosedPositions(
+export async function listClosedPositions(
   client: SaxoClient,
   input: ListClosedPositionsInput,
 ): Promise<unknown> {
-  return client.get('/port/v1/closedpositions/me', {
-    ClientKey: input.clientKey,
+  if (!input.clientKey && !input.accountKey) {
+    return client.get('/port/v1/closedpositions/me', {
+      $top: input.top,
+      $skip: input.skip,
+      FromDate: input.fromDate,
+      ToDate: input.toDate,
+    });
+  }
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
+  return client.get('/port/v1/closedpositions', {
+    ClientKey: clientKey,
     AccountKey: input.accountKey,
     $top: input.top,
     $skip: input.skip,
@@ -86,21 +102,24 @@ export interface ListOrdersInput {
   status?: 'Working' | 'All';
 }
 
-export function listOrders(client: SaxoClient, input: ListOrdersInput): Promise<unknown> {
-  const query = {
-    ClientKey: input.clientKey,
+export async function listOrders(client: SaxoClient, input: ListOrdersInput): Promise<unknown> {
+  if (!input.clientKey && !input.accountKey) {
+    return client.get('/port/v1/orders/me', {
+      $top: input.top,
+      $skip: input.skip,
+      FieldGroups: input.fieldGroups?.join(','),
+      Status: input.status,
+    });
+  }
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
+  return client.get('/port/v1/orders', {
+    ClientKey: clientKey,
     AccountKey: input.accountKey,
     $top: input.top,
     $skip: input.skip,
     FieldGroups: input.fieldGroups?.join(','),
     Status: input.status,
-  };
-
-  if (input.clientKey || input.accountKey) {
-    return client.get('/port/v1/orders', query);
-  }
-
-  return client.get('/port/v1/orders/me', query);
+  });
 }
 
 export interface GetOrderInput {
@@ -109,9 +128,10 @@ export interface GetOrderInput {
   fieldGroups?: string[];
 }
 
-export function getOrder(client: SaxoClient, input: GetOrderInput): Promise<unknown> {
+export async function getOrder(client: SaxoClient, input: GetOrderInput): Promise<unknown> {
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
   return client.get(`/port/v1/orders/${encodeURIComponent(input.orderId)}`, {
-    ClientKey: input.clientKey,
+    ClientKey: clientKey,
     FieldGroups: input.fieldGroups?.join(','),
   });
 }

@@ -85,6 +85,26 @@ export class SaxoClient {
     return this.accessTokenExpiresAt;
   }
 
+  /**
+   * Resolve the authenticated session's ClientKey, caching the result.
+   * Many `/port/v1/*` endpoints require ClientKey as a query parameter
+   * even when AccountKey is supplied, and most callers (LLMs especially)
+   * don't think to pass it explicitly. Functions that depend on it
+   * should call this when the caller's input.clientKey is missing.
+   */
+  private cachedClientKey?: string;
+  async resolveClientKey(): Promise<string> {
+    if (this.cachedClientKey) {
+      return this.cachedClientKey;
+    }
+    const me = await this.get<{ ClientKey?: string }>('/port/v1/users/me');
+    if (!me.ClientKey) {
+      throw new Error('Saxo /port/v1/users/me did not return a ClientKey.');
+    }
+    this.cachedClientKey = me.ClientKey;
+    return this.cachedClientKey;
+  }
+
   get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
     return this.request<T>('GET', path, query);
   }

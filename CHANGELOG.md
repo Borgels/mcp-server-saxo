@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-05-19
+
+Surfaced by a broader live-SIM sweep exercising tools that hadn't been
+hit yet (portfolio reads, condor pricing, credit-spread precheck).
+
+### Fixed
+
+- All `/port/v1/*` endpoints (`getBalance`, `listPositions`,
+  `listClosedPositions`, `listOrders`, `getOrder`) now resolve the
+  session's `ClientKey` automatically when the caller passes only
+  `accountKey`. Saxo's API requires `ClientKey` alongside `AccountKey`
+  even though the relationship is implied — without the auto-resolve
+  the wrapper rejected with `"The ClientKey field is required."` The
+  resolution caches once per `SaxoClient` instance to avoid repeated
+  `/users/me` calls.
+- Tool descriptions for `saxo_precheck_multileg_order` and
+  `saxo_place_multileg_order` previously claimed `OrderPrice` could be
+  negative for credit spreads. Saxo's API actually rejects negative
+  values with `"Price cannot be negative."` (verified live). Updated
+  descriptions, the README spread-order body section, and the
+  `saxo_capabilities` entries to make clear `OrderPrice` is always
+  positive; debit vs credit is implicit in each leg's `BuySell`.
+- `saxo_compute_spread_quote` description still says the result `mid`
+  can be negative (correct — when a multi-leg net-credits, mid is
+  negative). The asymmetry (compute returns signed, place wants
+  unsigned) is now documented so LLM drivers know to abs() the value
+  before passing it to a place_* call.
+
+### Verified live (broad sweep, 22+ checks)
+
+- session, accounts, balance (with auto-ClientKey)
+- list_exchanges, get_instrument_details (Stock + StockOption)
+- search_instruments (FxSpot, exchange-filtered)
+- get_infoprices_list (batched, with mixed Tradable / Pending types)
+- chart on StockOption throws a clear "Asset Type not supported" error
+- list_positions / list_closed_positions / list_orders on both
+  `/me` and explicit-key paths
+- estimate_vertical_spread for all 4 sides (BullCall / BearCall /
+  BullPut / BearPut) including credit-spread math
+- compute_spread_quote degrades gracefully when one condor leg has
+  no live quote (returns `undefined` aggregates rather than fp noise)
+- precheck single-leg Stock buy + multi-leg credit spread (which
+  surfaces the "Price cannot be negative." docs bug above)
+- list_option_expiries
+
+### Tests
+
+- Two new tests for the portfolio ClientKey auto-resolve and its
+  caching behavior.
+- 82/82 (was 80).
+
 ## [0.1.4] - 2026-05-19
 
 Follow-up to 0.1.3: the ExpiryDates filter fix shipped in 0.1.3
@@ -358,7 +409,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.4...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.5...HEAD
+[0.1.5]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2

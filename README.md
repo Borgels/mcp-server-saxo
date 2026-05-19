@@ -326,9 +326,12 @@ related orders (OCO, IfDone, brackets).
 ### Multi-leg option order body
 
 Multi-leg tools wrap Saxo's `/trade/v2/orders/multileg` family. `OrderType`
-must be `Limit`, `OrderPrice` is the per-contract net debit (positive) or
-credit (negative) for the whole strategy, and `Legs[]` accepts 2–20 legs
-that all share the same option root (same underlying + expiry).
+must be `Limit`. `OrderPrice` is always positive — the absolute limit
+price you are willing to pay (debit spread) or receive (credit spread).
+Saxo's API rejects negative `OrderPrice` with "Price cannot be
+negative"; the debit/credit direction is implicit in each leg's
+`BuySell`. `Legs[]` accepts 2–20 legs that all share the same option
+root (same underlying + expiry).
 
 ```json
 {

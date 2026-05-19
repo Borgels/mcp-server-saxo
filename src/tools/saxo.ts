@@ -369,7 +369,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Compute Spread Quote',
       description:
-        'Fetch live bid/ask for each leg of a multi-leg option strategy and compute the worst-case, best-case, and mid net debit (positive) or credit (negative). Surfaces NoAccess warnings per leg when market-data terms are missing.',
+        'Fetch live bid/ask for each leg of a multi-leg option strategy and compute the worst-case, best-case, and mid net debit. Result is positive when the strategy is a net debit (you pay), negative when it is a net credit (you receive). Surfaces NoAccess warnings per leg when market-data terms are missing.',
       inputSchema: {
         legs: z
           .array(
@@ -619,7 +619,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Precheck Multi-Leg Option Order',
       description:
-        'Validate a multi-leg option strategy (vertical/calendar spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is the per-contract net debit (positive) or credit (negative) for the whole strategy. All legs must share the same option root.',
+        'Validate a multi-leg option strategy (vertical/calendar spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is always **positive** — the absolute limit price you are willing to pay (debit spreads) or receive (credit spreads). Saxo infers debit vs credit from the Buy/Sell direction of the legs and rejects negative OrderPrice with "Price cannot be negative." All legs must share the same option root.',
       inputSchema: multiLegOrderSchema,
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
@@ -636,7 +636,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Place Multi-Leg Option Order',
       description:
-        'Place a multi-leg option strategy as one atomic order with a single net-debit/credit limit. All legs must share the same option root (same underlying + expiry). OrderType must be Limit. Returns MultiLegOrderId plus per-leg OrderIds.',
+        'Place a multi-leg option strategy as one atomic order with a single limit price. OrderType must be Limit. OrderPrice is always positive — the absolute price you are willing to pay (debit) or receive (credit); Saxo infers direction from the legs. All legs must share the same option root (same underlying + expiry). Returns MultiLegOrderId plus per-leg OrderIds.',
       inputSchema: multiLegOrderSchema,
       annotations: WRITE_TOOL_ANNOTATIONS,
     },

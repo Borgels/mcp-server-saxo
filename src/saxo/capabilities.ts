@@ -312,7 +312,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_precheck_multileg_order',
     title: 'Precheck Multi-Leg Option Order',
     description:
-      'Validate a multi-leg option strategy (spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is the net debit/credit for the whole strategy.',
+      'Validate a multi-leg option strategy (spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is always positive — the absolute price you are willing to pay (debit) or receive (credit). Saxo infers direction from the legs.',
     risk: 'write',
     examples: [
       {
@@ -334,7 +334,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_place_multileg_order',
     title: 'Place Multi-Leg Option Order',
     description:
-      'Place a multi-leg option strategy as one atomic order with a single net-debit/credit limit. All legs must share the same option root. OrderType must be Limit.',
+      'Place a multi-leg option strategy as one atomic order with a single positive limit price (debit = pay, credit = receive). All legs must share the same option root. OrderType must be Limit.',
     risk: 'write',
     examples: [
       {
@@ -351,7 +351,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     identifierFormats: ['Multi-leg body with Legs[] (min 2, max 20)'],
     safetyNotes: [
       'LIVE writes require SAXO_ENABLE_LIVE_TRADING=true + policy.allow_live_writes.',
-      'OrderPrice is per-contract net debit (positive) or credit (negative).',
+      'OrderPrice is always positive (debit = pay, credit = receive). Saxo rejects negative.',
     ],
     keywords: ['multileg', 'place', 'option', 'spread', 'straddle', 'condor', 'vertical'],
   },
