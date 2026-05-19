@@ -1,6 +1,6 @@
 import { SaxoClient } from '../src/saxo/client.js';
 import { searchInstruments } from '../src/saxo/reference.js';
-import { getSessionMe } from '../src/saxo/session.js';
+import { getDiagnostics, getSessionMe } from '../src/saxo/session.js';
 import { getInfoPrice } from '../src/saxo/prices.js';
 
 async function main(): Promise<void> {
@@ -17,8 +17,21 @@ async function main(): Promise<void> {
   const client = new SaxoClient({ environment, accessToken });
 
   console.error('-> saxo_session_me');
-  const session = (await getSessionMe(client)) as { ClientKey?: string };
-  console.error(`   ClientKey=${session.ClientKey ?? 'unknown'}`);
+  const session = await getSessionMe(client);
+  console.error(
+    `   Name=${session.Name ?? 'unknown'} ClientKey=${session.ClientKey ?? 'unknown'} ` +
+      `MarketDataTerms=${session.MarketDataViaOpenApiTermsAccepted ?? 'unknown'}`,
+  );
+
+  console.error('-> saxo_diagnostics');
+  const diag = await getDiagnostics(client);
+  console.error(
+    `   environment=${diag.environment} dataLevel=${diag.capabilities.dataLevel} ` +
+      `tokenExpiresInSeconds=${diag.token.expiresInSeconds ?? 'unknown'} warnings=${diag.warnings.length}`,
+  );
+  for (const w of diag.warnings) {
+    console.error(`   ! ${w}`);
+  }
 
   console.error('-> saxo_search_instruments (keywords=AAPL, assetTypes=[Stock])');
   const search = (await searchInstruments(client, {
@@ -36,8 +49,12 @@ async function main(): Promise<void> {
   const infoprice = await getInfoPrice(client, {
     uic: first.Identifier,
     assetType: first.AssetType,
+    fieldGroups: ['Quote'],
   });
-  console.error('   ok:', JSON.stringify(infoprice).slice(0, 160));
+  if (infoprice._warning) {
+    console.error(`   note: ${infoprice._warning}`);
+  }
+  console.error('   ok:', JSON.stringify(infoprice.Quote).slice(0, 160));
 
   console.error('\nSmoke test passed.');
 }

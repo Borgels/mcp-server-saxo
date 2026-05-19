@@ -10,9 +10,12 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_get_instrument_details',
   'saxo_list_exchanges',
   'saxo_get_option_chain',
+  'saxo_list_option_expiries',
   'saxo_get_infoprice',
   'saxo_get_infoprices_list',
   'saxo_get_chart',
+  'saxo_compute_spread_quote',
+  'saxo_estimate_vertical_spread',
   'saxo_list_accounts',
   'saxo_get_balance',
   'saxo_list_positions',
@@ -185,12 +188,31 @@ export function checkOrder(input: OrderPolicyInput, policy: SaxoPolicy): void {
 
   if (typeof policy.max_notional === 'number' && typeof input.Amount === 'number') {
     const price = input.OrderPrice ?? input.StopPrice;
-    if (typeof price === 'number' && input.Amount * price > policy.max_notional) {
-      throw new SaxoPolicyDeniedError(
-        'saxo_place_order',
-        `Notional ${input.Amount * price} exceeds policy max_notional (${policy.max_notional}).`,
-      );
+    if (typeof price === 'number') {
+      const multiplier = contractMultiplier(input.AssetType);
+      const notional = input.Amount * price * multiplier;
+      if (notional > policy.max_notional) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_order',
+          `Notional ${notional} (Amount × OrderPrice × multiplier ${multiplier}) exceeds policy max_notional (${policy.max_notional}).`,
+        );
+      }
     }
+  }
+}
+
+export function contractMultiplier(assetType: string | undefined): number {
+  if (!assetType) {
+    return 1;
+  }
+  switch (assetType) {
+    case 'StockOption':
+    case 'IndexOption':
+    case 'StockIndexOption':
+    case 'FuturesOption':
+      return 100;
+    default:
+      return 1;
   }
 }
 
@@ -269,15 +291,26 @@ export function checkMultiLegOrder(input: MultiLegPolicyInput, policy: SaxoPolic
   }
 
   if (typeof policy.max_notional === 'number' && typeof input.OrderPrice === 'number' && maxLegAmount > 0) {
-    // For option spreads OrderPrice is a per-contract net debit. The dollar
-    // exposure scales by the contract multiplier (100 for US equity options)
-    // and the largest leg amount. The contract multiplier varies, but using
-    // the raw amount is the conservative lower bound.
-    const notional = input.OrderPrice * maxLegAmount;
+    // OrderPrice is the per-contract net debit/credit. True notional risk is
+    // OrderPrice * largestLegAmount * contractMultiplier (100 for US equity
+    // options). We use the largest leg's AssetType for the multiplier; if
+    // unset we fall back to the option default of 100 to err toward blocking
+    // oversized trades rather than letting them through.
+    const largestLeg = input.Legs.reduce<MultiLegPolicyLeg | undefined>((best, leg) => {
+      if (typeof leg.Amount !== 'number') {
+        return best;
+      }
+      if (!best || (typeof best.Amount === 'number' && leg.Amount > best.Amount)) {
+        return leg;
+      }
+      return best;
+    }, undefined);
+    const multiplier = contractMultiplier(largestLeg?.AssetType ?? 'StockOption');
+    const notional = Math.abs(input.OrderPrice) * maxLegAmount * multiplier;
     if (notional > policy.max_notional) {
       throw new SaxoPolicyDeniedError(
         'saxo_place_multileg_order',
-        `Notional ${notional} (OrderPrice * largest leg Amount) exceeds policy max_notional (${policy.max_notional}).`,
+        `Notional ${notional} (|OrderPrice| × largest leg Amount × multiplier ${multiplier}) exceeds policy max_notional (${policy.max_notional}).`,
       );
     }
   }

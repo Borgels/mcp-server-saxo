@@ -23,12 +23,14 @@ export interface SaxoClientOptions {
 export class SaxoClient {
   readonly environment: SaxoEnvironment;
   private accessToken?: string;
+  private accessTokenExpiresAt?: number;
   private refreshToken?: string;
   private readonly appKey?: string;
   private readonly appSecret?: string;
-  private readonly baseUrl: string;
+  readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
+  private static readonly REFRESH_LEAD_MS = 60_000;
 
   constructor(options: SaxoClientOptions = {}) {
     this.environment = resolveEnvironment(
@@ -40,6 +42,10 @@ export class SaxoClient {
     this.refreshToken = options.refreshToken ?? process.env.SAXO_REFRESH_TOKEN ?? undefined;
     this.appKey = options.appKey ?? process.env.SAXO_APP_KEY ?? undefined;
     this.appSecret = options.appSecret ?? process.env.SAXO_APP_SECRET ?? undefined;
+    this.accessTokenExpiresAt = parseExpiry(process.env.SAXO_TOKEN_EXPIRES_AT);
+    if (this.accessTokenExpiresAt === undefined && this.accessToken) {
+      this.accessTokenExpiresAt = expiryFromJwt(this.accessToken);
+    }
 
     this.baseUrl = trimTrailingSlash(
       options.baseUrl ?? process.env.SAXO_BASE_URL ?? endpoints.apiBase,
@@ -64,6 +70,19 @@ export class SaxoClient {
     if (tokens.refreshToken) {
       this.refreshToken = tokens.refreshToken;
     }
+    if (tokens.expiresAt) {
+      this.accessTokenExpiresAt = tokens.expiresAt;
+    } else {
+      this.accessTokenExpiresAt = expiryFromJwt(tokens.accessToken);
+    }
+  }
+
+  getAccessToken(): string | undefined {
+    return this.accessToken;
+  }
+
+  getAccessTokenExpiresAt(): number | undefined {
+    return this.accessTokenExpiresAt;
   }
 
   get<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
@@ -107,6 +126,8 @@ export class SaxoClient {
         'Missing SAXO_ACCESS_TOKEN. Set it in the MCP server environment or run `npm run auth`.',
       );
     }
+
+    await this.maybeProactiveRefresh();
 
     const response = await this.send(method, path, query, body);
 
@@ -176,6 +197,25 @@ export class SaxoClient {
 
     this.setTokens(tokens);
   }
+
+  private async maybeProactiveRefresh(): Promise<void> {
+    if (!this.hasRefreshCredentials()) {
+      return;
+    }
+    if (this.accessTokenExpiresAt === undefined) {
+      return;
+    }
+    if (this.accessTokenExpiresAt - Date.now() > SaxoClient.REFRESH_LEAD_MS) {
+      return;
+    }
+    try {
+      await this.refreshTokens();
+    } catch (error) {
+      // Surface the underlying request 401 if proactive refresh fails; do not
+      // swallow this because the upcoming request would just fail anyway.
+      throw new Error(`Proactive Saxo token refresh failed: ${(error as Error).message}`);
+    }
+  }
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
@@ -223,4 +263,41 @@ function assertSafeBaseUrl(baseUrl: string): void {
 
 function isLocalHost(hostname: string): boolean {
   return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+}
+
+function parseExpiry(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric > 1e12 ? numeric : numeric * 1000;
+  }
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
+function expiryFromJwt(token: string): number | undefined {
+  const parts = token.split('.');
+  if (parts.length !== 3) {
+    return undefined;
+  }
+  try {
+    const payload = JSON.parse(
+      Buffer.from(parts[1]!.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'),
+    ) as Record<string, unknown>;
+    const exp = payload.exp;
+    if (typeof exp === 'number' && Number.isFinite(exp)) {
+      return exp * 1000;
+    }
+    if (typeof exp === 'string') {
+      const parsed = Number.parseInt(exp, 10);
+      if (Number.isFinite(parsed)) {
+        return parsed * 1000;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return undefined;
 }

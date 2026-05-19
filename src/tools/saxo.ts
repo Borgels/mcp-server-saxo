@@ -9,7 +9,13 @@ import {
   WRITE_TOOL_ANNOTATIONS,
 } from '../saxo/capabilities.js';
 import type { SaxoClient } from '../saxo/client.js';
-import { getChart, getInfoPrice, getInfoPricesList } from '../saxo/prices.js';
+import {
+  computeSpreadQuote,
+  estimateVerticalSpread,
+  getChart,
+  getInfoPrice,
+  getInfoPricesList,
+} from '../saxo/prices.js';
 import {
   getBalance,
   getOrder,
@@ -30,6 +36,8 @@ import {
   getInstrumentDetails,
   getOptionChain,
   listExchanges,
+  listOptionExpiries,
+  normalizeOptionChain,
   searchInstruments,
 } from '../saxo/reference.js';
 import { getDiagnostics, getSessionMe } from '../saxo/session.js';
@@ -246,7 +254,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Get Option Chain',
       description:
-        'Fetch the option chain (strikes + expirations) for an option root. Use this after saxo_search_instruments with assetTypes=[StockOption] to find the Uic of each option leg before placing a multi-leg spread.',
+        'Fetch the option chain (strikes + expirations) for an option root. Use this after saxo_search_instruments with assetTypes=[StockOption] to find the Uic of each option leg before placing a multi-leg spread. Set normalize=true (default) to return one row per strike with callUic+putUic; normalize=false returns the raw Saxo OptionSpace shape.',
       inputSchema: {
         optionRootId: z.number().int().nonnegative(),
         expiryDates: z
@@ -257,8 +265,30 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
               .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO 8601 date YYYY-MM-DD.'),
           )
           .optional(),
-        optionSpaceSegment: z.enum(['AllStrikes', 'DefaultStrikes', 'SpecificStrikes']).optional(),
         strikeCount: z.number().int().min(1).max(200).optional(),
+        clientKey: z.string().trim().min(1).optional(),
+        accountKey: z.string().trim().min(1).optional(),
+        trading: z.enum(['AllTrading', 'OnlyTradable']).optional(),
+        normalize: z.boolean().default(true),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_option_chain', input, async () => {
+        const { normalize, ...query } = input;
+        const raw = await getOptionChain(client, query);
+        return jsonToolResult(normalize ? normalizeOptionChain(raw) : raw);
+      }),
+  );
+
+  server.registerTool(
+    'saxo_list_option_expiries',
+    {
+      title: 'List Option Expiries',
+      description:
+        'Cheap helper that returns just the available expiries for an option root: expiry date, days-to-expiry, last trade date, and strike count. Use to pick an expiry before pulling the full chain.',
+      inputSchema: {
+        optionRootId: z.number().int().nonnegative(),
         clientKey: z.string().trim().min(1).optional(),
         accountKey: z.string().trim().min(1).optional(),
         trading: z.enum(['AllTrading', 'OnlyTradable']).optional(),
@@ -266,8 +296,8 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runAuditedTool(client, 'saxo_get_option_chain', input, async () =>
-        jsonToolResult(await getOptionChain(client, input)),
+      runAuditedTool(client, 'saxo_list_option_expiries', input, async () =>
+        jsonToolResult(await listOptionExpiries(client, input)),
       ),
   );
 
@@ -331,6 +361,56 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_get_chart', input, async () =>
         jsonToolResult(await getChart(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_compute_spread_quote',
+    {
+      title: 'Compute Spread Quote',
+      description:
+        'Fetch live bid/ask for each leg of a multi-leg option strategy and compute the worst-case, best-case, and mid net debit (positive) or credit (negative). Surfaces NoAccess warnings per leg when market-data terms are missing.',
+      inputSchema: {
+        legs: z
+          .array(
+            z.object({
+              uic: z.number().int().nonnegative(),
+              assetType: z.string().trim().min(1),
+              buySell: z.enum(['Buy', 'Sell']),
+              amount: z.number().positive(),
+            }),
+          )
+          .min(1)
+          .max(10),
+        accountKey: z.string().trim().min(1).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_compute_spread_quote', input, async () =>
+        jsonToolResult(await computeSpreadQuote(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_estimate_vertical_spread',
+    {
+      title: 'Estimate Vertical Spread Risk',
+      description:
+        'Pure math: given side (BullCall/BearCall/BullPut/BearPut), longStrike, shortStrike, debit (negative for credit spreads), and contracts, returns max loss, max gain, and breakeven in account currency, applying the option contract multiplier (100 for US equity options).',
+      inputSchema: {
+        side: z.enum(['BullCall', 'BearCall', 'BullPut', 'BearPut']),
+        longStrike: z.number().positive(),
+        shortStrike: z.number().positive(),
+        debit: z.number(),
+        contracts: z.number().int().positive(),
+        assetType: z.string().trim().min(1).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_estimate_vertical_spread', input, async () =>
+        jsonToolResult(estimateVerticalSpread(input)),
       ),
   );
 
@@ -840,8 +920,13 @@ function auditTarget(input: unknown): unknown {
     multiLegOrderId: value.multiLegOrderId,
     optionRootId: value.optionRootId,
     expiryDates: value.expiryDates,
-    optionSpaceSegment: value.optionSpaceSegment,
     strikeCount: value.strikeCount,
+    side: value.side,
+    longStrike: value.longStrike,
+    shortStrike: value.shortStrike,
+    debit: value.debit,
+    contracts: value.contracts,
+    legs: value.legs,
     keywords: value.keywords,
     exchangeId: value.exchangeId,
     horizon: value.horizon,

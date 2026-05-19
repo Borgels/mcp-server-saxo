@@ -39,22 +39,24 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
   {
     id: 'saxo_session_me',
     title: 'Get Saxo Session',
-    description: 'Return the current Saxo session: ClientKey, UserKey, default account, language, culture.',
+    description:
+      'Return the authenticated Saxo user (Name, ClientKey, UserKey, LegalAssetTypes, MarketDataViaOpenApiTermsAccepted). Useful to verify the access token works.',
     risk: 'read',
     examples: [{}],
     identifierFormats: [],
     safetyNotes: ['Validates the access token without side effects.'],
-    keywords: ['session', 'me', 'whoami', 'token check'],
+    keywords: ['session', 'me', 'whoami', 'token check', 'user'],
   },
   {
     id: 'saxo_diagnostics',
     title: 'Saxo OpenAPI Diagnostics',
-    description: 'Hit the Saxo diagnostics endpoint to verify connectivity.',
+    description:
+      'Aggregate session info, capabilities, token expiry, environment, and warnings (market-data terms not accepted, DataLevel not Realtime, token expiring soon). Call this first when prices look wrong or write tools fail.',
     risk: 'read',
     examples: [{}],
     identifierFormats: [],
     safetyNotes: ['Read-only.'],
-    keywords: ['diagnostics', 'health', 'ping'],
+    keywords: ['diagnostics', 'health', 'ping', 'warnings', 'check', 'token'],
   },
   {
     id: 'saxo_search_instruments',
@@ -90,12 +92,57 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_get_option_chain',
     title: 'Get Option Chain',
     description:
-      'Fetch the option chain (all strikes + expirations) for an option root. Use this to find the Uic of each option leg before placing a multi-leg spread.',
+      'Fetch the option chain (strikes + expirations) for an option root. By default returns a normalized shape with one row per strike containing callUic + putUic. Pass normalize=false for the raw Saxo OptionSpace structure.',
     risk: 'read',
-    examples: [{ optionRootId: 1009, optionSpaceSegment: 'AllStrikes' }],
+    examples: [
+      { optionRootId: 1467, expiryDates: ['2027-01-15'] },
+      { optionRootId: 1467, expiryDates: ['2027-01-15'], normalize: false },
+    ],
     identifierFormats: ['optionRootId (integer)'],
     safetyNotes: ['Read-only.'],
     keywords: ['option', 'chain', 'strikes', 'expiry', 'options'],
+  },
+  {
+    id: 'saxo_list_option_expiries',
+    title: 'List Option Expiries',
+    description:
+      'Cheap helper: returns just available expiries (date, days-to-expiry, last trade date, strike count) for an option root. Use to pick an expiry before pulling the full chain.',
+    risk: 'read',
+    examples: [{ optionRootId: 1467 }],
+    identifierFormats: ['optionRootId (integer)'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['option', 'expiries', 'expiry', 'dates'],
+  },
+  {
+    id: 'saxo_compute_spread_quote',
+    title: 'Compute Spread Quote',
+    description:
+      'Fetch bid/ask for each leg of a multi-leg spread and compute worst-case, best-case, and mid net debit. Returns per-leg warnings when market-data terms are not accepted.',
+    risk: 'read',
+    examples: [
+      {
+        legs: [
+          { uic: 53115502, assetType: 'StockOption', buySell: 'Buy', amount: 150 },
+          { uic: 57413062, assetType: 'StockOption', buySell: 'Sell', amount: 150 },
+        ],
+      },
+    ],
+    identifierFormats: ['legs: Array<{uic, assetType, buySell, amount}>'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['spread', 'quote', 'debit', 'credit', 'price', 'multileg'],
+  },
+  {
+    id: 'saxo_estimate_vertical_spread',
+    title: 'Estimate Vertical Spread Risk',
+    description:
+      'Pure math: given side (BullCall/BearCall/BullPut/BearPut), strikes, debit, and contracts, returns max loss, max gain, and breakeven applying the option contract multiplier (100 for US equity options).',
+    risk: 'read',
+    examples: [
+      { side: 'BullCall', longStrike: 15, shortStrike: 20, debit: 1.08, contracts: 150 },
+    ],
+    identifierFormats: ['side + strikes + debit + contracts'],
+    safetyNotes: ['Read-only. Does not call Saxo.'],
+    keywords: ['spread', 'risk', 'breakeven', 'max loss', 'max gain', 'vertical', 'estimate'],
   },
   {
     id: 'saxo_get_infoprice',

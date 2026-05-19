@@ -51,6 +51,23 @@ cp .env.example .env
    npm run dev:http     # http://127.0.0.1:3000/mcp
    ```
 
+### Market data is a second, separate consent
+
+The 24-hour token unlocks **authenticated API access**, but live bid/ask
+quotes via `/trade/v1/infoprices` require a **separate per-exchange market
+data agreement** (NYSE, OPRA, EUREX, etc.). Until you accept it,
+`saxo_get_infoprice` returns `PriceTypeAsk/Bid: "NoAccess"` with `Amount: 0`,
+and `saxo_session_me` reports `MarketDataViaOpenApiTermsAccepted: false`.
+
+There is **no Saxo OpenAPI endpoint** to flip this flag programmatically —
+it's a human consent screen. Find it in the Saxo trading platform
+(SaxoTraderGO → settings → live data subscriptions) or developer.saxo. Once
+accepted, the same token starts returning quotes (typically `DelayedByMinutes: 15`
+on SIM unless your `DataLevel` is `Realtime`).
+
+`saxo_diagnostics` flags this condition in its `warnings[]` and infoprices
+responses are decorated with `_warning` when they're NoAccess.
+
 ## Authentication
 
 This server reads credentials from environment variables only — they are
@@ -152,15 +169,18 @@ rules.
 | Tool | Endpoint | Purpose |
 | --- | --- | --- |
 | `saxo_capabilities` | — | Discover tools without calling Saxo. |
-| `saxo_session_me` | `GET /root/v1/sessions/me` | Verify the access token, get ClientKey/UserKey. |
-| `saxo_diagnostics` | `GET /root/v1/diagnostics/get` | Connectivity check. |
+| `saxo_session_me` | `GET /port/v1/users/me` | Authenticated user (Name, ClientKey, UserKey, MarketDataViaOpenApiTermsAccepted). |
+| `saxo_diagnostics` | (aggregated) | Session + capabilities + token expiry + warnings (market-data terms, DataLevel, token close to expiry). |
 | `saxo_search_instruments` | `GET /ref/v1/instruments` | Search by keyword + asset type. |
 | `saxo_get_instrument_details` | `GET /ref/v1/instruments/details` | Detailed metadata for one or many Uics. |
 | `saxo_list_exchanges` | `GET /ref/v1/exchanges` | List exchanges (or one by ExchangeId). |
-| `saxo_get_option_chain` | `GET /ref/v1/instruments/contractoptionspaces/{optionRootId}` | Strikes + expirations for an option root. |
-| `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. |
+| `saxo_get_option_chain` | `GET /ref/v1/instruments/contractoptionspaces/{optionRootId}` | Strikes + expirations. `normalize=true` (default) pivots Put/Call into one row per strike. |
+| `saxo_list_option_expiries` | (uses option chain) | Cheap helper: just the expiries (date, days, strike count) for an option root. |
+| `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. Adds `_warning` if `PriceType=NoAccess`. |
 | `saxo_get_infoprices_list` | `GET /trade/v1/infoprices/list` | Snapshot prices for multiple Uics. |
 | `saxo_get_chart` | `GET /chart/v3/charts` | Historical OHLC bars (horizon in minutes). |
+| `saxo_compute_spread_quote` | (uses infoprices) | Fetch bid/ask per leg and compute worst-case, mid, best-case net debit for a multi-leg spread. |
+| `saxo_estimate_vertical_spread` | (pure math) | Given side + strikes + debit + contracts: max loss, max gain, breakeven, R/R. Applies 100x option multiplier. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
 | `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions. |
