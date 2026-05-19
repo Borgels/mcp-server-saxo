@@ -4,14 +4,24 @@ name: Release
 # trigger this. Publishes the package to npm as @borgels/mcp-server-saxo
 # and creates a GitHub Release with the .mcpb bundle attached.
 #
-# Required repo secrets:
-#   NPM_TOKEN  — npm automation token with publish access to @borgels/*
+# Authentication:
+#   Primary: npm Trusted Publishers via GitHub Actions OIDC. Configure
+#     once on npmjs.com → package settings → Trusted publishing → add
+#     this repo + this workflow file (release.yml). Then no secret is
+#     needed; `npm publish` auto-detects the OIDC token.
+#   Bootstrap: until trusted publishing is configured (which requires
+#     the package to already exist on npm), set the `NPM_TOKEN` repo
+#     secret to a one-time automation token. After the first publish
+#     and trusted-publisher setup, revoke the token and delete the
+#     secret.
 
 on:
   push:
     tags: ['v*']
 
 permissions:
+  # `id-token: write` is required for OIDC trusted publishing.
+  # `contents: write` is required to create the GitHub Release.
   contents: write
   id-token: write
 
@@ -75,9 +85,15 @@ jobs:
 
       # Publish to npm BEFORE rebuilding node_modules — `prepack`
       # runs typecheck + test + build, which need devDependencies.
+      # `--provenance` records a SLSA attestation linking this exact
+      # workflow run to the published artifact. Works with both OIDC
+      # (trusted publishing) and NPM_TOKEN auth.
       - name: Publish to npm
-        run: npm publish --access public --tag "${{ steps.rel.outputs.npm_tag }}"
+        run: npm publish --access public --provenance --tag "${{ steps.rel.outputs.npm_tag }}"
         env:
+          # Only used until trusted publishing is configured on
+          # npmjs.com. After that, this secret can be deleted from the
+          # repo and OIDC handles auth.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Reinstall with --omit=dev so the .mcpb only includes runtime

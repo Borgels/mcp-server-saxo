@@ -417,6 +417,53 @@ Optional live SIM smoke test (requires a 24-hour SIM token):
 SAXO_ACCESS_TOKEN="your-sim-token" npm run smoke:live
 ```
 
+## Releasing
+
+Tagged releases trigger
+[`.github/workflows/release.yml`](.github/workflows/release.yml). On
+`git push --tags vX.Y.Z`:
+
+1. Typecheck, test, build, validate the MCPB manifest.
+2. Publish `@borgels/mcp-server-saxo@X.Y.Z` to npm with `--provenance`
+   so the package carries a SLSA attestation linking it to the exact
+   CI run + commit.
+3. Reinstall with `--omit=dev` and pack a small `.mcpb` bundle
+   (~2.6 MB; full dev install yields ~17 MB).
+4. Create a GitHub Release with the matching CHANGELOG section as the
+   body and the `.mcpb` attached.
+
+Pre-release tags (e.g. `v0.1.1-rc.1`) publish under the `next` npm
+dist-tag and as a GitHub pre-release.
+
+### One-time setup before the first release
+
+1. **Create the npm org.** At
+   <https://www.npmjs.com/org/create>, create the `borgels`
+   organization (free, public packages).
+2. **Bootstrap the first publish.** Trusted Publishing (see below)
+   can't be configured until the package exists on npm, so the very
+   first publish needs a token. Either:
+   - **Local one-shot:** `npm publish --access public` with a one-time
+     Automation Token logged in as a member of the `borgels` org. Run
+     this once from a clean checkout of the tagged commit. Revoke the
+     token immediately afterwards.
+   - **CI bootstrap:** add the token as the `NPM_TOKEN` repo secret,
+     push `v0.1.1-rc.1`, let CI publish, then delete the secret.
+3. **Configure Trusted Publishing** (one-time, per package):
+   <https://www.npmjs.com/package/@borgels/mcp-server-saxo/access> →
+   *Trusted publishing* → Add publisher. Enter
+   - Organization: `Borgels`
+   - Repository: `mcp-server-saxo`
+   - Workflow filename: `release.yml`
+   - Environment: leave blank (or set to e.g. `production` if you
+     want to gate releases behind a GitHub Environment approval).
+4. **Revoke the bootstrap token** and delete the `NPM_TOKEN` repo
+   secret. From this point on, every release authenticates via
+   GitHub Actions OIDC — no long-lived secrets anywhere.
+
+The same three steps repeat once per sibling Borgels MCP server when
+they migrate to this template.
+
 ## Rate Limits
 
 Saxo applies per-service-group rate limits (typically ~120 requests per

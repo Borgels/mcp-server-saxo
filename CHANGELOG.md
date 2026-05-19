@@ -29,10 +29,18 @@ released between 0.1.0 and 0.1.1.
   install time, with `sensitive: true` on the tokens.
 - Added [`.github/workflows/release.yml`](.github/workflows/release.yml).
   On `git push --tags vX.Y.Z`: typecheck + test + build, validate
-  manifest, pack `.mcpb`, publish to npm with `--access public`,
+  manifest, publish to npm with `--access public --provenance` (SLSA
+  attestation), reinstall with `--omit=dev` and pack a small `.mcpb`,
   create a GitHub Release with the `.mcpb` attached and the CHANGELOG
   section as the release body. Pre-release tags
   (e.g. `v0.1.1-rc.1`) publish under the `next` dist-tag.
+- Release auth uses npm **Trusted Publishers** (GitHub Actions OIDC)
+  once configured on npmjs.com → package settings → Trusted
+  publishing. Workflow grants `id-token: write` so `npm publish`
+  exchanges the OIDC token for short-lived credentials at publish
+  time — no long-lived `NPM_TOKEN` after the bootstrap publish. The
+  workflow still reads `secrets.NPM_TOKEN` if present to support the
+  first publish (which has to predate trusted-publisher config).
 
 ### Fixed
 
