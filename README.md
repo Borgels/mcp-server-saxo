@@ -145,11 +145,22 @@ authorize endpoint with a PKCE challenge, and writes
 The MCP server only listens on loopback (`127.0.0.1`) for the callback, so the
 flow never touches the public network beyond Saxo itself.
 
-## Claude / Cursor / Inspector Config
+## Connecting an MCP Client
 
-Prereq: run `npm run build` once so `dist/transports/stdio.js` exists.
+This server speaks the standard Model Context Protocol over two
+transports — pick whichever your client supports:
 
-### Minimal — 24h SIM token
+- **stdio** (recommended for local clients): entry point at
+  `dist/transports/stdio.js`. Run `npm run build` once to produce it.
+- **Streamable HTTP**: entry point at `dist/transports/http.js`. See
+  [Optional HTTP Server](#optional-http-server) below.
+
+Any MCP-compatible client (Claude Desktop, Claude Code, Cursor, MCP
+Inspector, custom SDK clients, etc.) configures it the same way: as an
+entry in the client's `mcpServers` map with `command`, `args`, and
+`env`. The shape below is the MCP convention.
+
+### Minimal config — 24h SIM token
 
 ```json
 {
@@ -166,11 +177,11 @@ Prereq: run `npm run build` once so `dist/transports/stdio.js` exists.
 }
 ```
 
-### Durable — OAuth with refresh
+### Durable config — OAuth with refresh
 
 After running `npm run auth -- --env sim` once (see Quickstart Path B),
-copy the resulting `SAXO_REFRESH_TOKEN` into the env block. The server
-will refresh access tokens automatically — no daily re-paste.
+copy the resulting credentials into the env block. The server will
+refresh access tokens automatically — no daily re-paste.
 
 ```json
 {
@@ -185,7 +196,6 @@ will refresh access tokens automatically — no daily re-paste.
         "SAXO_REFRESH_TOKEN": "...",
         "SAXO_ACCESS_TOKEN": "...",
         "SAXO_TOKEN_EXPIRES_AT": "2026-05-19T18:00:37.823Z",
-        "SAXO_REDIRECT_URI": "http://localhost:8765/callback",
         "SAXO_ENABLE_LIVE_TRADING": "false"
       }
     }
@@ -193,60 +203,48 @@ will refresh access tokens automatically — no daily re-paste.
 }
 ```
 
-`SAXO_ACCESS_TOKEN` is allowed to be expired at startup — the proactive
-refresh in `SaxoClient` decodes the JWT `exp`, detects it's within 60s
-of expiry, and runs the refresh-token grant before sending the first
-request. `SAXO_TOKEN_EXPIRES_AT` is optional (the JWT carries it), but
-including it lets the client refresh without making a wasted request
-first.
+`SAXO_ACCESS_TOKEN` may be expired at startup — `SaxoClient` decodes
+the JWT `exp`, detects it's within 60s of expiry, and runs the
+refresh-token grant before sending the first request. The refresh
+token is what really matters at cold start.
 
-### Windows paths
-
-Use double backslashes inside JSON. Example for a repo at
-`C:\Users\you\repos\mcp-server-saxo`:
-
-```json
-"args": [
-  "C:\\Users\\you\\repos\\mcp-server-saxo\\dist\\transports\\stdio.js"
-]
-```
-
-### Dev mode (rebuild not required on edits)
+### Dev mode (live source, no rebuild on edits)
 
 ```json
 {
-  "mcpServers": {
-    "saxo": {
-      "command": "npm",
-      "args": ["run", "dev", "--prefix", "/absolute/path/to/mcp-server-saxo"],
-      "env": {
-        "SAXO_ENVIRONMENT": "sim",
-        "SAXO_ACCESS_TOKEN": "your-24h-sim-token",
-        "SAXO_AUDIT_LOG": "/absolute/path/to/saxo-audit.jsonl"
-      }
-    }
-  }
+  "command": "npm",
+  "args": ["run", "dev", "--prefix", "/absolute/path/to/mcp-server-saxo"],
+  "env": { "SAXO_ENVIRONMENT": "sim", "SAXO_ACCESS_TOKEN": "..." }
 }
+```
+
+### Path escaping
+
+On Windows, use double backslashes inside JSON strings or forward
+slashes:
+
+```json
+"args": ["C:\\path\\to\\mcp-server-saxo\\dist\\transports\\stdio.js"]
+"args": ["C:/path/to/mcp-server-saxo/dist/transports/stdio.js"]
 ```
 
 ### After editing the config
 
-- **Claude Desktop:** fully quit (File → Exit, not just close the
-  window — the close button leaves it running in the tray) and reopen.
-  MCP servers spawn only on cold start.
-- **Cursor:** restart the agent panel.
-- **MCP Inspector:** disconnect / reconnect.
+Restart your MCP client. Most clients spawn their MCP server processes
+only at startup, so config changes don't take effect until the client
+fully exits and reopens (note: some clients keep running in the system
+tray when the window is closed — make sure to actually quit).
 
-### If the server fails to register
+### Troubleshooting
 
-- Claude Desktop logs: `%APPDATA%\Claude\logs\` on Windows,
-  `~/Library/Logs/Claude/` on macOS. Look for entries naming `saxo` or
-  the spawned `node` command — stderr from the child is captured here.
-- Verify the path in `args` resolves from a fresh shell (`node
-  /absolute/path/to/...stdio.js` should start and wait for stdin).
-- Call `saxo_diagnostics` from inside the client first when something
-  looks off — its `warnings[]` array surfaces missing market-data
-  terms, near-expiry tokens, and live env without
+- If the server doesn't appear in the client's tool list, check the
+  client's MCP logs (each client documents its log location).
+- Verify the path in `args` is reachable: from a fresh shell, `node
+  /absolute/path/to/dist/transports/stdio.js` should start and wait
+  for stdin without error.
+- Once connected, call `saxo_diagnostics` first when something looks
+  off — its `warnings[]` array surfaces missing market-data terms,
+  near-expiry tokens, `DataLevel` not Realtime, and live env without
   `SAXO_ENABLE_LIVE_TRADING`.
 
 ## Start Here

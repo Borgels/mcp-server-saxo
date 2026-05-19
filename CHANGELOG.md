@@ -145,6 +145,15 @@ between 0.1.0 and 0.1.1.
   programmatically — confirmed by probing PATCH/PUT on
   `/port/v1/users/me`, `/atr/v1/disclaimers`, `/cs/v1/disclaimers`,
   `/mkt/v1/disclaimers`, and similar shapes.
+- README's MCP-client-install section reframed to be transport- and
+  client-agnostic. Leads with the standard `mcpServers.<name>.{command,
+  args, env}` shape (the MCP convention), mentions stdio and HTTP
+  transports up front, names Claude Desktop / Claude Code / Cursor /
+  MCP Inspector as equal-footed example clients rather than centring
+  any one of them. Adds a minimal vs durable (OAuth refresh) config
+  pair, a Windows path-escaping note, and a generic troubleshooting
+  pointer that defers to each client's own log location instead of
+  hard-coding Claude Desktop's paths.
 
 ## [0.1.0] - 2026-05-19
 
