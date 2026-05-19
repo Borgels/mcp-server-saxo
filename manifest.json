@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-server-saxo",
   "display_name": "Saxo Bank OpenAPI",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
   "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. 30 tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, single-leg and multi-leg option orders, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
   "author": {

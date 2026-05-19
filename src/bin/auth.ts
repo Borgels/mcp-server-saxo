@@ -99,10 +99,13 @@ function printHelp(): void {
 
 Environment variables required:
   SAXO_APP_KEY
-  SAXO_APP_SECRET
+  SAXO_APP_SECRET (required for Code-grant apps; omit for PKCE-grant apps)
   SAXO_REDIRECT_URI (default http://localhost:8765/callback). The exact value
-  must be registered in the Saxo app. Saxo's authorize endpoint rejects IP-
-  literal redirects, so use a hostname (localhost), not 127.0.0.1.
+    must be registered in the Saxo app. Saxo's authorize endpoint rejects IP-
+    literal redirects, so use a hostname (localhost), not 127.0.0.1.
+    For PKCE-grant apps the registered URL in the portal must OMIT the port
+    (e.g. http://localhost/callback); the URL sent by this CLI keeps the
+    port and Saxo matches port-blind.
 `);
 }
 

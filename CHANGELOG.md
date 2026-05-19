@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-05-19
+
+OAuth now supports PKCE-grant ("public client") apps in addition to
+Code-grant ("confidential client") apps. Previously the wrapper
+hard-required `SAXO_APP_SECRET` and always sent HTTP Basic auth,
+which would have failed against a PKCE-only Saxo app.
+
+### Added
+
+- `exchangeCodeForTokens` and `refreshAccessToken` now branch on
+  whether `appSecret` is present:
+  - **With secret (Code grant / confidential client):** unchanged —
+    HTTP Basic Authorization header carries `client_id:secret`.
+  - **Without secret (PKCE grant / public client):** no Authorization
+    header; `client_id` goes into the form body alongside
+    `code_verifier` (per RFC 6749 §2.3.1).
+- `loadOauthConfigFromEnv` no longer throws when `SAXO_APP_SECRET` is
+  missing; only `SAXO_APP_KEY` is required.
+- `SaxoClient.hasRefreshCredentials()` returns true for PKCE clients
+  (just `refreshToken + appKey`), so proactive refresh works for both
+  flows.
+- Manifest's `SAXO_APP_SECRET` user_config field is now formally
+  optional — the description already implied that ("required when
+  using OAuth refresh"); the runtime now matches.
+
+### Tests
+
+- Three new unit tests verify the exact wire shape for both flows:
+  Code-grant exchange uses Basic auth + no client_id in body, PKCE
+  exchange uses no Authorization + client_id in body, PKCE refresh
+  uses the same shape. Plus a regression that
+  `hasRefreshCredentials()` accepts PKCE clients.
+- 86/86 (was 82).
+
+### Docs
+
+- README + auth CLI help text now document a Saxo PKCE-specific
+  quirk that's easy to miss and produces a confusing
+  `unauthorized_client` error: PKCE apps require the redirect URL
+  **registered in the portal** to OMIT the port (so
+  `http://localhost/callback`, not `http://localhost:8765/callback`).
+  The URL sent at runtime can still include the port — Saxo's PKCE
+  flow matches port-blind. Code-grant apps still require the
+  registered URL to match the runtime URL exactly.
+
 ## [0.1.5] - 2026-05-19
 
 Surfaced by a broader live-SIM sweep exercising tools that hadn't been
@@ -409,7 +454,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.1.3

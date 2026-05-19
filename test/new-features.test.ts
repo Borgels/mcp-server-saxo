@@ -19,6 +19,98 @@ import {
 } from '../src/saxo/reference.js';
 import { inspectAccessToken } from '../src/saxo/session.js';
 
+describe('OAuth supports both Code-grant (with secret) and PKCE-grant (no secret) apps', () => {
+  it('Code-grant: token exchange uses HTTP Basic auth with app secret', async () => {
+    const { exchangeCodeForTokens } = await import('../src/saxo/auth.js');
+    let capturedHeaders: Headers | undefined;
+    let capturedBody: string | undefined;
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      capturedHeaders = new Headers((init as RequestInit)?.headers as Record<string, string>);
+      capturedBody = (init as RequestInit)?.body as string;
+      return new Response(
+        JSON.stringify({ access_token: 'AT', refresh_token: 'RT', expires_in: 3600 }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    });
+    await exchangeCodeForTokens({
+      code: 'code',
+      codeVerifier: 'v',
+      redirectUri: 'http://localhost:8765/callback',
+      appKey: 'KEY',
+      appSecret: 'SECRET',
+      environment: 'sim',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    expect(capturedHeaders?.get('authorization')).toMatch(/^Basic /);
+    const decoded = Buffer.from(capturedHeaders!.get('authorization')!.replace('Basic ', ''), 'base64').toString();
+    expect(decoded).toBe('KEY:SECRET');
+    // body should NOT contain client_id (auth is in the header)
+    expect(capturedBody).not.toMatch(/client_id=KEY/);
+    expect(capturedBody).toMatch(/code_verifier=v/);
+  });
+
+  it('PKCE-grant: token exchange sends client_id in body, no Authorization header', async () => {
+    const { exchangeCodeForTokens } = await import('../src/saxo/auth.js');
+    let capturedHeaders: Headers | undefined;
+    let capturedBody: string | undefined;
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      capturedHeaders = new Headers((init as RequestInit)?.headers as Record<string, string>);
+      capturedBody = (init as RequestInit)?.body as string;
+      return new Response(
+        JSON.stringify({ access_token: 'AT', refresh_token: 'RT', expires_in: 3600 }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    });
+    await exchangeCodeForTokens({
+      code: 'code',
+      codeVerifier: 'v',
+      redirectUri: 'http://localhost:8765/callback',
+      appKey: 'PKCE_KEY',
+      // no appSecret
+      environment: 'sim',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    expect(capturedHeaders?.get('authorization')).toBeNull();
+    expect(capturedBody).toMatch(/client_id=PKCE_KEY/);
+    expect(capturedBody).toMatch(/code_verifier=v/);
+  });
+
+  it('PKCE-grant: refresh sends client_id in body, no Authorization header', async () => {
+    const { refreshAccessToken } = await import('../src/saxo/auth.js');
+    let capturedHeaders: Headers | undefined;
+    let capturedBody: string | undefined;
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      capturedHeaders = new Headers((init as RequestInit)?.headers as Record<string, string>);
+      capturedBody = (init as RequestInit)?.body as string;
+      return new Response(
+        JSON.stringify({ access_token: 'AT2', refresh_token: 'RT2', expires_in: 1200 }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const tokens = await refreshAccessToken({
+      refreshToken: 'RT1',
+      appKey: 'PKCE_KEY',
+      environment: 'sim',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    expect(capturedHeaders?.get('authorization')).toBeNull();
+    expect(capturedBody).toMatch(/client_id=PKCE_KEY/);
+    expect(capturedBody).toMatch(/grant_type=refresh_token/);
+    expect(tokens.accessToken).toBe('AT2');
+  });
+
+  it('hasRefreshCredentials accepts PKCE clients (no secret)', () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'a',
+      refreshToken: 'r',
+      appKey: 'k',
+      // no appSecret
+    });
+    expect(client.hasRefreshCredentials()).toBe(true);
+  });
+});
+
 describe('Portfolio endpoints auto-resolve ClientKey from session (regression)', () => {
   it('getBalance falls back to session ClientKey when caller passes only accountKey', async () => {
     const { getBalance } = await import('../src/saxo/portfolio.js');

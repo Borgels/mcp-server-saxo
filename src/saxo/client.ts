@@ -62,7 +62,10 @@ export class SaxoClient {
   }
 
   hasRefreshCredentials(): boolean {
-    return Boolean(this.refreshToken && this.appKey && this.appSecret);
+    // PKCE-grant apps refresh with refresh_token + client_id (no secret).
+    // Code-grant apps refresh with refresh_token + client_id + secret.
+    // Both modes require refresh_token + appKey.
+    return Boolean(this.refreshToken && this.appKey);
   }
 
   setTokens(tokens: SaxoTokenSet): void {
@@ -203,9 +206,11 @@ export class SaxoClient {
   }
 
   private async refreshTokens(): Promise<void> {
-    if (!this.refreshToken || !this.appKey || !this.appSecret) {
-      throw new Error('Cannot refresh Saxo token: missing refresh token or app credentials.');
+    if (!this.refreshToken || !this.appKey) {
+      throw new Error('Cannot refresh Saxo token: missing refresh token or app key.');
     }
+    // appSecret is optional — only required for "Code" grant (confidential
+    // client). "PKCE" grant apps refresh without a secret.
 
     const tokens = await refreshAccessToken({
       refreshToken: this.refreshToken,

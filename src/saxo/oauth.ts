@@ -11,7 +11,8 @@ import {
 export interface OauthFlowConfig {
   environment: SaxoEnvironment;
   appKey: string;
-  appSecret: string;
+  /** Required for Saxo "Code" grant apps; omitted for "PKCE" grant apps. */
+  appSecret?: string;
   redirectUri: string;
   fetchImpl?: typeof fetch;
 }
@@ -22,7 +23,7 @@ export interface PendingOauthFlow {
   redirectUri: string;
   environment: SaxoEnvironment;
   appKey: string;
-  appSecret: string;
+  appSecret?: string;
   verifier: string;
   expectedState: string;
   createdAt: number;
@@ -39,11 +40,12 @@ export function loadOauthConfigFromEnv(environment?: SaxoEnvironment | string): 
   const env = resolveEnvironment(environment !== undefined ? String(environment) : readEnv('SAXO_ENVIRONMENT'));
   const appKey = readEnv('SAXO_APP_KEY');
   const appSecret = readEnv('SAXO_APP_SECRET');
-  if (!appKey || !appSecret) {
-    throw new Error(
-      'OAuth requires SAXO_APP_KEY and SAXO_APP_SECRET in the MCP server environment.',
-    );
+  if (!appKey) {
+    throw new Error('OAuth requires SAXO_APP_KEY in the MCP server environment.');
   }
+  // SAXO_APP_SECRET is optional: confidential ("Code" grant) apps have
+  // one; public ("PKCE" grant) apps don't. The flow detects the
+  // difference and adjusts the token request accordingly.
   // Saxo's authorize endpoint rejects IP-literal redirects with
   // "Invalid value of redirect_uri parameter. It must be an absolute uri",
   // so the default uses the localhost hostname. The registered URL in the

@@ -55,16 +55,28 @@ the server refresh tokens for you. This is also the path you'll need for
 LIVE.
 
 1. Sign up at <https://www.developer.saxo/>.
-2. **App Management → Create application** (mark as SIM, grant type
-   **Code**, allow trading if you'll be placing orders).
-3. Register the redirect URL **exactly** as
-   `http://localhost:8765/callback`. Saxo rejects IP-literal redirects
-   like `http://127.0.0.1:...` at parse time, so use the hostname.
+2. **App Management → Create application** (mark as SIM, allow trading
+   if you'll be placing orders). Pick either grant type — the server
+   supports both:
+   - **Code** (confidential client, has an App Secret)
+   - **PKCE** (public client, no secret — slightly safer for
+     distributable clients but functionally equivalent for this server)
+3. Register the redirect URL in the portal:
+   - **For Code apps**: register exactly `http://localhost:8765/callback`.
+     Saxo matches the full URL including port at runtime, and rejects
+     IP-literal redirects like `http://127.0.0.1:...`, so use the
+     hostname.
+   - **For PKCE apps**: register `http://localhost/callback` — Saxo's
+     PKCE flow requires the registered URL to **omit the port**
+     ("When registering the redirect URL with your application, it
+     cannot include a port number"). The server still sends
+     `http://localhost:8765/callback` at runtime; Saxo matches
+     port-blind. Mismatching this returns `unauthorized_client`.
 4. Put the credentials in `.env`:
    ```
    SAXO_ENVIRONMENT=sim
    SAXO_APP_KEY=...
-   SAXO_APP_SECRET=...
+   SAXO_APP_SECRET=...        # Only for Code-grant apps. Omit for PKCE.
    SAXO_REDIRECT_URI=http://localhost:8765/callback
    ```
 5. Run the auth CLI:
@@ -73,7 +85,10 @@ LIVE.
    ```
    This opens your browser to Saxo's authorize page, you click Allow, and
    the CLI writes `SAXO_ACCESS_TOKEN`, `SAXO_REFRESH_TOKEN`, and
-   `SAXO_TOKEN_EXPIRES_AT` back into `.env`.
+   `SAXO_TOKEN_EXPIRES_AT` back into `.env`. Both grant types use the
+   same flow; the server detects the absence of `SAXO_APP_SECRET` and
+   switches to PKCE-style token exchange (no Authorization header,
+   `client_id` in the form body).
 
 The OAuth access token Saxo issues is short-lived (~20 minutes on SIM),
 but `SaxoClient` proactively refreshes it from the refresh token ~60s
