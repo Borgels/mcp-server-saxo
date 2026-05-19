@@ -239,6 +239,136 @@ describe('estimateVerticalSpread', () => {
   });
 });
 
+describe('computeSpreadQuote bidAskWidth (regression — was returning fp noise)', () => {
+  it('sums per-leg widths regardless of buy/sell direction', async () => {
+    // Reproduces the live SIM case: 15C bid 2.50 ask 2.55 (width 0.05),
+    // 20C bid 1.49 ask 1.52 (width 0.03). Old code did
+    // width_buy - width_sell which yields 0.02 (or near-zero floating
+    // point noise when widths happen to be equal). Correct answer is
+    // the sum of leg widths: 0.05 + 0.03 = 0.08.
+    const responses: Record<number, unknown> = {
+      100: {
+        Uic: 100,
+        AssetType: 'StockOption',
+        Quote: { Bid: 2.5, Ask: 2.55, PriceTypeAsk: 'Tradable', PriceTypeBid: 'Tradable' },
+      },
+      200: {
+        Uic: 200,
+        AssetType: 'StockOption',
+        Quote: { Bid: 1.49, Ask: 1.52, PriceTypeAsk: 'Tradable', PriceTypeBid: 'Tradable' },
+      },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const uic = Number(new URL(url as string).searchParams.get('Uic') ?? 0);
+      return new Response(JSON.stringify(responses[uic]), {
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const result = await computeSpreadQuote(client, {
+      legs: [
+        { uic: 100, assetType: 'StockOption', buySell: 'Buy', amount: 150 },
+        { uic: 200, assetType: 'StockOption', buySell: 'Sell', amount: 150 },
+      ],
+    });
+    // Should be ~0.08, NOT ~0 or near-fp-noise
+    expect(result.bidAskWidth).toBeCloseTo(0.08, 5);
+    // Cross-check identity: worstCaseDebit - bestCaseDebit == bidAskWidth
+    expect(result.bidAskWidth!).toBeCloseTo(
+      (result.worstCaseDebit ?? 0) - (result.bestCaseDebit ?? 0),
+      5,
+    );
+  });
+
+  it('returns same width for equal-width legs (no floating-point cancellation)', async () => {
+    // The original bug surfaced as 4.44e-16 when both legs had equal widths
+    // because width_buy - width_sell = 0 with fp rounding noise.
+    const responses: Record<number, unknown> = {
+      100: { Uic: 100, Quote: { Bid: 2.5, Ask: 2.55, PriceTypeAsk: 'Tradable', PriceTypeBid: 'Tradable' } },
+      200: { Uic: 200, Quote: { Bid: 1.5, Ask: 1.55, PriceTypeAsk: 'Tradable', PriceTypeBid: 'Tradable' } },
+    };
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const uic = Number(new URL(url as string).searchParams.get('Uic') ?? 0);
+      return new Response(JSON.stringify(responses[uic]), {
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const result = await computeSpreadQuote(client, {
+      legs: [
+        { uic: 100, assetType: 'StockOption', buySell: 'Buy', amount: 1 },
+        { uic: 200, assetType: 'StockOption', buySell: 'Sell', amount: 1 },
+      ],
+    });
+    expect(result.bidAskWidth).toBeCloseTo(0.1, 5); // 0.05 + 0.05, NOT 0
+    expect(result.bidAskWidth).toBeGreaterThan(1e-10);
+  });
+});
+
+describe('normalizeOptionChain drops empty expiry slots (regression)', () => {
+  it('keeps only expiries with SpecificOptions populated when Saxo returns filler entries', async () => {
+    const { normalizeOptionChain } = await import('../src/saxo/reference.js');
+    // Reproduces the Saxo behavior with ExpiryDates=2027-01-15: all 15
+    // expiry metadata entries come back, only the requested one has
+    // SpecificOptions populated. The other 14 should be dropped.
+    const raw = {
+      OptionSpace: [
+        {
+          Expiry: '2026-07-17',
+          DisplayDaysToExpiry: 100,
+          SpecificOptions: [], // empty — should be dropped
+        },
+        {
+          Expiry: '2027-01-15',
+          DisplayDaysToExpiry: 300,
+          SpecificOptions: [
+            { Uic: 1, StrikePrice: 15, PutCall: 'Call' as const, TradingStatus: 'Tradable' },
+            { Uic: 2, StrikePrice: 15, PutCall: 'Put' as const, TradingStatus: 'Tradable' },
+          ],
+        },
+        {
+          Expiry: '2027-06-17',
+          DisplayDaysToExpiry: 500,
+          // SpecificOptions omitted entirely
+        },
+      ],
+    };
+    const norm = normalizeOptionChain(raw);
+    expect(norm.expiries.map(e => e.expiry)).toEqual(['2027-01-15']);
+    expect(norm.strikes.map(s => s.strike)).toEqual([15]);
+  });
+
+  it('keeps all expiries when all are populated (unfiltered query path)', async () => {
+    const { normalizeOptionChain } = await import('../src/saxo/reference.js');
+    const raw = {
+      OptionSpace: [
+        {
+          Expiry: '2026-07-17',
+          SpecificOptions: [
+            { Uic: 10, StrikePrice: 10, PutCall: 'Call' as const },
+          ],
+        },
+        {
+          Expiry: '2027-01-15',
+          SpecificOptions: [
+            { Uic: 20, StrikePrice: 20, PutCall: 'Call' as const },
+          ],
+        },
+      ],
+    };
+    const norm = normalizeOptionChain(raw);
+    expect(norm.expiries.map(e => e.expiry)).toEqual(['2026-07-17', '2027-01-15']);
+  });
+});
+
 describe('computeSpreadQuote', () => {
   it('computes worst-case / mid debit and surfaces NoAccess warnings', async () => {
     const responses: Record<number, unknown> = {
@@ -279,8 +409,9 @@ describe('computeSpreadQuote', () => {
     expect(result.worstCaseDebit).toBeCloseTo(1.3, 5);
     // best-case = bid(buy) - ask(sell) = 1.5 - 0.6 = 0.9
     expect(result.bestCaseDebit).toBeCloseTo(0.9, 5);
-    // bidAskWidth = (1.7-1.5) + -(0.6-0.4) = 0.2 - 0.2 = 0
-    expect(result.bidAskWidth).toBeCloseTo(0, 5);
+    // bidAskWidth = sum of per-leg widths = (1.7-1.5) + (0.6-0.4) = 0.4.
+    // Equal to worstCaseDebit - bestCaseDebit by identity.
+    expect(result.bidAskWidth).toBeCloseTo(0.4, 5);
     expect(result.warnings).toHaveLength(0);
   });
 

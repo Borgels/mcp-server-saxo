@@ -190,7 +190,15 @@ export async function computeSpreadQuote(
     midDebit: aggregate(legs, l => l.mid),
     worstCaseDebit: aggregate(legs, l => (l.buySell === 'Buy' ? l.ask : l.bid)),
     bestCaseDebit: aggregate(legs, l => (l.buySell === 'Buy' ? l.bid : l.ask)),
-    bidAskWidth: aggregate(legs, l => (l.bid !== undefined && l.ask !== undefined ? l.ask - l.bid : undefined)),
+    // Total bid/ask "noise" you can pay over best-case = sum of per-leg
+    // widths, regardless of buy/sell direction. Mathematically:
+    // worstCaseDebit - bestCaseDebit = sum(ask-bid for each leg). The
+    // aggregate() helper flips the sign on sell legs (correct for prices
+    // because you pay bid on buys and receive ask on sells), but for
+    // widths that sign-flip would nearly cancel near-symmetric spreads
+    // down to floating-point noise (e.g. 4.44e-16). Sum the absolute
+    // widths instead.
+    bidAskWidth: sumWidths(legs),
     warnings,
   };
 }
@@ -206,6 +214,17 @@ function aggregate(
       return undefined;
     }
     total += value * (leg.buySell === 'Buy' ? 1 : -1);
+  }
+  return total;
+}
+
+function sumWidths(legs: SpreadLegQuote[]): number | undefined {
+  let total = 0;
+  for (const leg of legs) {
+    if (leg.bid === undefined || leg.ask === undefined) {
+      return undefined;
+    }
+    total += Math.abs(leg.ask - leg.bid);
   }
   return total;
 }

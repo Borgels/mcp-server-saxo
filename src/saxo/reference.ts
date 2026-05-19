@@ -138,8 +138,19 @@ export function normalizeOptionChain(raw: OptionChainRawResponse): NormalizedOpt
   const expiries: NormalizedExpiry[] = [];
   const strikes: NormalizedStrike[] = [];
 
+  // Saxo's `/ref/v1/instruments/contractoptionspaces/{id}?ExpiryDates=...`
+  // ALWAYS returns the full OptionSpace array (one entry per expiry the
+  // underlying has), but only populates `SpecificOptions` for the
+  // expiries the caller asked about. Without the filter, every entry is
+  // populated. Either way, an entry with no SpecificOptions is just an
+  // empty placeholder — drop it so a filtered query returns only what
+  // the caller asked for, and an unfiltered query still returns
+  // everything (since every entry is populated in that case).
   for (const expiry of raw.OptionSpace ?? []) {
     const options = expiry.SpecificOptions ?? [];
+    if (options.length === 0) {
+      continue;
+    }
     expiries.push({
       expiry: expiry.Expiry,
       displayExpiry: expiry.DisplayExpiry,

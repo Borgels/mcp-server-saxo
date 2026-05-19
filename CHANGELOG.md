@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-19
+
+Two bug fixes caught by driving the live SIM tools end-to-end through
+Claude Desktop.
+
+### Fixed
+
+- `saxo_compute_spread_quote` `bidAskWidth` was computed via the same
+  signed aggregator as `midDebit` / `worstCaseDebit` / `bestCaseDebit`,
+  which flips the sign on sell legs. For widths that's mathematically
+  wrong — bid/ask width is non-directional. The result was that for
+  spreads with similar per-leg widths (which is most option spreads),
+  the buy and sell widths almost cancelled and the field returned
+  floating-point noise like `4.44e-16` instead of the actual sum.
+  Now `bidAskWidth = sum(|ask − bid|)` across legs, which is exactly
+  `worstCaseDebit − bestCaseDebit` (the spread the LLM driver should
+  budget for over best-case execution).
+- `saxo_get_option_chain` returned all 15 expiry slots even when
+  `expiryDates: ["2027-01-15"]` was passed. Saxo's API always returns
+  the full `OptionSpace` array but only populates `SpecificOptions`
+  for the expiries the caller asked about. `normalizeOptionChain` now
+  drops expiry entries with no `SpecificOptions`, so a filtered query
+  returns just the requested expiries and an unfiltered query still
+  returns the full set (since every entry is populated in that case).
+
+### Tests
+
+- Regression test for `bidAskWidth` using the exact NOK 15C/20C SIM
+  quotes from the user's test session (0.05 + 0.03 = 0.08, not
+  0.05 − 0.03 = 0.02).
+- Regression test for equal-width legs that originally produced fp
+  noise; now asserts the result is strictly above 1e-10.
+- Tightened the existing `computeSpreadQuote` test which had the bug
+  baked in as expected behavior (`bidAskWidth ≈ 0` for symmetric
+  widths). It now asserts `bidAskWidth ≈ worstCaseDebit − bestCaseDebit`.
+- New test for `normalizeOptionChain` dropping empty expiry slots
+  when Saxo returns filler entries.
+
 ## [0.1.2] - 2026-05-19
 
 Hot-fix release. The MCPB bundle in 0.1.1 was unusable from Claude
@@ -279,7 +317,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Borgels/mcp-server-saxo/releases/tag/v0.1.0
