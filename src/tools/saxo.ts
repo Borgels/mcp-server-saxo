@@ -20,7 +20,9 @@ import {
   getBalance,
   getOrder,
   listAccounts,
+  listActivities,
   listClosedPositions,
+  listNetPositions,
   listOrders,
   listPositions,
 } from '../saxo/portfolio.js';
@@ -33,10 +35,12 @@ import {
   type OrderPolicyInput,
 } from '../saxo/policy.js';
 import {
+  findOptionLeg,
   getInstrumentDetails,
   getOptionChain,
   listExchanges,
   listOptionExpiries,
+  listStandardOptionExpiries,
   normalizeOptionChain,
   searchInstruments,
 } from '../saxo/reference.js';
@@ -302,6 +306,51 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 
   server.registerTool(
+    'saxo_list_standard_option_expiries',
+    {
+      title: 'List Standard Option Expiry Dates',
+      description:
+        'Return the standardized option-expiry calendar (3rd Friday monthlies, quarterlies, weeklies) from Saxo reference data. Useful for "is 2027-01-15 a standard monthly?" reasoning. For per-option-root expiries, use saxo_list_option_expiries instead.',
+      inputSchema: {
+        fromDate: z
+          .string()
+          .trim()
+          .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO 8601 date YYYY-MM-DD.')
+          .optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_list_standard_option_expiries', input, async () =>
+        jsonToolResult(await listStandardOptionExpiries(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_find_option_leg',
+    {
+      title: 'Find Option Leg by Symbol/Expiry/Strike',
+      description:
+        'Convenience helper that resolves an option leg Uic from human-readable parameters (symbol + expiry + strike + Call/Put). Compresses the 4-step option-discovery workflow (search instrument → search option root → fetch chain → locate strike) into one call. Useful before saxo_place_order / saxo_place_multileg_order. When multiple option roots match (e.g. ADR vs. local listing), prefers the multi-leg-capable root and surfaces alternatives in warnings[]; pass exchangeId to disambiguate.',
+      inputSchema: {
+        symbol: z.string().trim().min(1),
+        expiry: z
+          .string()
+          .trim()
+          .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO 8601 date YYYY-MM-DD.'),
+        strike: z.number().positive(),
+        putCall: z.enum(['Call', 'Put']),
+        exchangeId: z.string().trim().min(1).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_find_option_leg', input, async () =>
+        jsonToolResult(await findOptionLeg(client, input)),
+      ),
+  );
+
+  server.registerTool(
     'saxo_get_infoprice',
     {
       title: 'Get Snapshot Price',
@@ -452,7 +501,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     'saxo_list_positions',
     {
       title: 'List Open Positions',
-      description: 'List open positions for the authenticated client or a specific account.',
+      description: 'List open positions for the authenticated client or a specific account. Returns one row per position (multiple rows per instrument if filled at different prices). Use saxo_list_net_positions for the per-instrument aggregated view.',
       inputSchema: {
         clientKey: z.string().trim().min(1).optional(),
         accountKey: z.string().trim().min(1).optional(),
@@ -465,6 +514,26 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_list_positions', input, async () =>
         jsonToolResult(await listPositions(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_list_net_positions',
+    {
+      title: 'List Net Positions (Aggregated)',
+      description: 'List positions aggregated per instrument (one row per Uic with the net amount), rather than per individual fill. Right view for "what is my current exposure?" — no manual deduplication needed.',
+      inputSchema: {
+        clientKey: z.string().trim().min(1).optional(),
+        accountKey: z.string().trim().min(1).optional(),
+        fieldGroups: z.array(z.string().trim().min(1)).optional(),
+        top: z.number().int().min(1).max(500).optional(),
+        skip: z.number().int().min(0).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_list_net_positions', input, async () =>
+        jsonToolResult(await listNetPositions(client, input)),
       ),
   );
 
@@ -494,6 +563,28 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_list_closed_positions', input, async () =>
         jsonToolResult(await listClosedPositions(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_list_activities',
+    {
+      title: 'List Account Activities',
+      description: 'Recent account events from /port/v1/activities — placed/modified/cancelled orders, trades, dividend payments, corporate actions. Pass fromDateTime/toDateTime (ISO 8601 with timezone) to scope; defaults to a recent window on Saxo side. Useful for "what happened on my account today?" reasoning.',
+      inputSchema: {
+        clientKey: z.string().trim().min(1).optional(),
+        accountKey: z.string().trim().min(1).optional(),
+        fromDateTime: z.string().trim().min(1).optional(),
+        toDateTime: z.string().trim().min(1).optional(),
+        activityTypes: z.array(z.string().trim().min(1)).optional(),
+        top: z.number().int().min(1).max(500).optional(),
+        skip: z.number().int().min(0).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_list_activities', input, async () =>
+        jsonToolResult(await listActivities(client, input)),
       ),
   );
 
@@ -927,6 +1018,13 @@ function auditTarget(input: unknown): unknown {
     debit: value.debit,
     contracts: value.contracts,
     legs: value.legs,
+    symbol: value.symbol,
+    expiry: value.expiry,
+    strike: value.strike,
+    putCall: value.putCall,
+    fromDateTime: value.fromDateTime,
+    toDateTime: value.toDateTime,
+    activityTypes: value.activityTypes,
     keywords: value.keywords,
     exchangeId: value.exchangeId,
     horizon: value.horizon,

@@ -12,6 +12,8 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_list_exchanges',
   'saxo_get_option_chain',
   'saxo_list_option_expiries',
+  'saxo_list_standard_option_expiries',
+  'saxo_find_option_leg',
   'saxo_get_infoprice',
   'saxo_get_infoprices_list',
   'saxo_get_chart',
@@ -20,7 +22,9 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_list_accounts',
   'saxo_get_balance',
   'saxo_list_positions',
+  'saxo_list_net_positions',
   'saxo_list_closed_positions',
+  'saxo_list_activities',
   'saxo_list_orders',
   'saxo_get_order',
 ]);

@@ -114,6 +114,31 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['option', 'expiries', 'expiry', 'dates'],
   },
   {
+    id: 'saxo_list_standard_option_expiries',
+    title: 'List Standard Option Expiry Dates',
+    description:
+      'Standardized option-expiry calendar (3rd Friday monthlies, quarterlies, weeklies) from Saxo reference data. Distinct from saxo_list_option_expiries which is per-option-root.',
+    risk: 'read',
+    examples: [{}, { fromDate: '2026-01-01' }],
+    identifierFormats: ['optional fromDate (ISO 8601)'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['option', 'expiry', 'standard', 'calendar', 'monthly', 'quarterly', 'weekly'],
+  },
+  {
+    id: 'saxo_find_option_leg',
+    title: 'Find Option Leg by Symbol/Expiry/Strike',
+    description:
+      'Convenience helper: given symbol + expiry + strike + Call/Put, returns the option leg Uic. Compresses the 4-step option discovery flow (search → root → chain → strike) into one call. Use before saxo_place_order / saxo_place_multileg_order.',
+    risk: 'read',
+    examples: [
+      { symbol: 'NOK', expiry: '2027-01-15', strike: 15, putCall: 'Call' },
+      { symbol: 'AAPL', expiry: '2027-01-15', strike: 200, putCall: 'Put', exchangeId: 'OPRA' },
+    ],
+    identifierFormats: ['symbol + ISO expiry + strike + Call/Put (+ optional exchangeId)'],
+    safetyNotes: ['Read-only. Composed from saxo_search_instruments + saxo_get_option_chain — same data, fewer round trips.'],
+    keywords: ['option', 'find', 'lookup', 'leg', 'uic', 'discovery'],
+  },
+  {
     id: 'saxo_compute_spread_quote',
     title: 'Compute Spread Quote',
     description:
@@ -213,6 +238,28 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     identifierFormats: ['Optional AccountKey, date range'],
     safetyNotes: ['Read-only.'],
     keywords: ['closed', 'history', 'pnl'],
+  },
+  {
+    id: 'saxo_list_net_positions',
+    title: 'List Net Positions (Aggregated)',
+    description:
+      'Positions aggregated per instrument (one row per Uic), not per fill. Right view for "what is my current exposure?" — no manual deduplication needed.',
+    risk: 'read',
+    examples: [{}, { accountKey: 'AccountKey...' }],
+    identifierFormats: ['Optional AccountKey / ClientKey'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['positions', 'net', 'aggregated', 'exposure'],
+  },
+  {
+    id: 'saxo_list_activities',
+    title: 'List Account Activities',
+    description:
+      'Account activity log: placed/modified/cancelled orders, trades, dividends, corporate actions. Pass fromDateTime/toDateTime to scope. Useful for audit trails and "what happened?" reasoning.',
+    risk: 'read',
+    examples: [{}, { fromDateTime: '2026-05-19T00:00:00Z' }],
+    identifierFormats: ['Optional AccountKey, ISO 8601 date-time range, activity types'],
+    safetyNotes: ['Read-only.'],
+    keywords: ['activities', 'history', 'trades', 'audit', 'dividends', 'corporate-actions'],
   },
   {
     id: 'saxo_list_orders',

@@ -207,6 +207,147 @@ function countDistinctStrikes(options: OptionChainSpecificOption[]): number {
   return set.size;
 }
 
+export interface ListStandardOptionExpiriesInput {
+  /** ISO date YYYY-MM-DD; defaults to today on Saxo side if omitted. */
+  fromDate?: string;
+}
+
+/**
+ * Saxo `GET /ref/v1/standarddates/optionexpiry`. Returns the
+ * standardized option-expiry calendar (3rd Friday monthlies,
+ * quarterlies, weeklies). Different from `listOptionExpiries`, which
+ * returns expiries for a specific option root.
+ */
+export function listStandardOptionExpiries(
+  client: SaxoClient,
+  input: ListStandardOptionExpiriesInput = {},
+): Promise<unknown> {
+  return client.get('/ref/v1/standarddates/optionexpiry', {
+    FromDate: input.fromDate,
+  });
+}
+
+export interface FindOptionLegInput {
+  symbol: string;
+  expiry: string;
+  strike: number;
+  putCall: 'Call' | 'Put';
+  /** Disambiguate ambiguous tickers (e.g. NOK on NYSE vs Helsinki). */
+  exchangeId?: string;
+}
+
+export interface FoundOptionLeg {
+  uic: number;
+  assetType: 'StockOption';
+  symbol?: string;
+  description?: string;
+  optionRootId: number;
+  underlyingUic?: number;
+  expiry: string;
+  strike: number;
+  putCall: 'Call' | 'Put';
+  tradingStatus?: string;
+  warnings: string[];
+}
+
+/**
+ * Compress the 4-step option-discovery workflow (search instrument →
+ * search option root → fetch chain → locate strike) into one call.
+ *
+ * Returns the resolved leg Uic plus the per-strike metadata. When
+ * multiple option roots match (e.g. `NOK` has both NYSE+OPRA US
+ * options and Helsinki+Eurex EU options), prefers the root with
+ * `CanParticipateInMultiLegOrder: true`. Surfaces ambiguity in
+ * `warnings`. Throws if the requested strike isn't in the chain.
+ */
+export async function findOptionLeg(
+  client: SaxoClient,
+  input: FindOptionLegInput,
+): Promise<FoundOptionLeg> {
+  const warnings: string[] = [];
+  const search = (await searchInstruments(client, {
+    keywords: input.symbol,
+    assetTypes: ['StockOption'],
+    top: 20,
+  })) as {
+    Data?: Array<{
+      Identifier: number;
+      AssetType?: string;
+      Description?: string;
+      Symbol?: string;
+      ExchangeId?: string;
+      CanParticipateInMultiLegOrder?: boolean;
+      CurrencyCode?: string;
+    }>;
+  };
+  const candidates = (search.Data ?? []).filter(d => d.AssetType === 'StockOption');
+  if (candidates.length === 0) {
+    throw new Error(`No StockOption root found for symbol "${input.symbol}".`);
+  }
+  let filtered = candidates;
+  if (input.exchangeId) {
+    filtered = candidates.filter(d => d.ExchangeId === input.exchangeId);
+    if (filtered.length === 0) {
+      throw new Error(
+        `No StockOption root for "${input.symbol}" on exchange "${input.exchangeId}". ` +
+          `Candidates without filter: ${candidates.map(c => `${c.Identifier}@${c.ExchangeId}`).join(', ')}`,
+      );
+    }
+  }
+  let picked = filtered.find(c => c.CanParticipateInMultiLegOrder) ?? filtered[0];
+  if (filtered.length > 1) {
+    warnings.push(
+      `Multiple option roots matched "${input.symbol}"; picked Uic=${picked!.Identifier} (${picked!.ExchangeId}, ${picked!.CurrencyCode}). ` +
+        `Others: ${filtered.filter(c => c !== picked).map(c => `${c.Identifier}@${c.ExchangeId}`).join(', ')}. Pass exchangeId to disambiguate.`,
+    );
+  }
+  const optionRootId = picked!.Identifier;
+
+  const chainRaw = await getOptionChain(client, {
+    optionRootId,
+    expiryDates: [input.expiry],
+  });
+  const chain = normalizeOptionChain(chainRaw);
+  const expiry = chain.expiries.find(e => e.expiry === input.expiry);
+  if (!expiry) {
+    throw new Error(
+      `Expiry "${input.expiry}" not in chain for option root ${optionRootId}. ` +
+        `Available: ${chain.expiries.map(e => e.expiry).join(', ') || '(none)'}`,
+    );
+  }
+  const strikeRow = chain.strikes.find(s => s.strike === input.strike);
+  if (!strikeRow) {
+    const available = chain.strikes.map(s => s.strike);
+    const min = Math.min(...available);
+    const max = Math.max(...available);
+    throw new Error(
+      `Strike ${input.strike} not in chain for ${input.symbol} ${input.expiry} on option root ${optionRootId}. ` +
+        `Available range: ${min}–${max} (${available.length} strikes).`,
+    );
+  }
+  const uic = input.putCall === 'Call' ? strikeRow.callUic : strikeRow.putUic;
+  const tradingStatus =
+    input.putCall === 'Call' ? strikeRow.callTradingStatus : strikeRow.putTradingStatus;
+  if (uic === undefined) {
+    throw new Error(
+      `Strike ${input.strike} ${input.putCall} not available in chain (other side may exist).`,
+    );
+  }
+
+  return {
+    uic,
+    assetType: 'StockOption',
+    symbol: picked!.Symbol,
+    description: picked!.Description,
+    optionRootId,
+    expiry: input.expiry,
+    strike: input.strike,
+    putCall: input.putCall,
+    tradingStatus,
+    warnings,
+  };
+}
+
 export interface ListOptionExpiriesInput {
   optionRootId: number;
   clientKey?: string;

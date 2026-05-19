@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-05-19
+
+Two themes: prove the multi-leg write path actually works against live
+SIM (we'd only ever validated precheck before), and add the
+highest-value missing tools the LLM driver was asking for via chatty
+multi-step flows.
+
+### Verified live (no code changes for this part)
+
+- Multi-leg write path end-to-end against live Saxo SIM:
+  place → list → modify → cancel for a NOK Jan 15 2027 15/20 call
+  spread (1 contract @ 0.05 → modified to 0.07 → cancelled).
+  - Place: HTTP 201 with `MultiLegOrderId` + per-leg `Orders[].OrderId`
+  - Modify: HTTP 200, response carries `MultiLegOrderId`
+  - Cancel: HTTP 200, `Orders: [{ MultiLegOrderId }]`
+  - Cash balance unchanged after the round trip (no margin held)
+  - `listOrders` shows the per-leg orders but doesn't surface
+    `MultiLegOrderId` on the leg objects — known Saxo quirk;
+    reconstruct the group via per-order detail if needed.
+
+### Added — three Saxo endpoints + one convenience helper
+
+- `saxo_list_net_positions` — `/port/v1/netpositions/{me}`. Positions
+  aggregated per instrument, one row per Uic with the net amount.
+  Right view for "what's my current exposure?" without manual
+  deduplication. Uses the same ClientKey auto-resolve as the other
+  `/port/v1/*` reads.
+- `saxo_list_activities` — `/port/v1/activities`. Recent account
+  events (placed/modified/cancelled orders, trades, dividend
+  payments, corporate actions). Pass `fromDateTime` / `toDateTime`
+  (ISO 8601) to scope; `$top` / `$skip` for paging.
+- `saxo_list_standard_option_expiries` —
+  `/ref/v1/standarddates/optionexpiry`. The standardized option-
+  expiry calendar (3rd Friday monthlies, quarterlies, weeklies).
+  Distinct from `saxo_list_option_expiries`, which is per-option-root.
+  Useful for "is this a standard monthly?" reasoning.
+- `saxo_find_option_leg` (convenience helper, pure composition) —
+  given `symbol + expiry + strike + Call/Put` (+ optional
+  `exchangeId`), returns the option leg Uic. Compresses the 4-step
+  option-discovery workflow (search instrument → search option root
+  → fetch chain → locate strike) into one call. When multiple option
+  roots match (e.g. `NOK` has both US OPRA and Helsinki/EUREX
+  options), prefers the multi-leg-capable root and surfaces
+  alternatives in `warnings[]`.
+
+### Changed
+
+- `saxo_list_positions` description now mentions
+  `saxo_list_net_positions` as the right alternative when you want
+  the aggregated view.
+- Audit log target capture extended to include the new fields
+  (`symbol`, `expiry`, `strike`, `putCall`, `fromDateTime`,
+  `toDateTime`, `activityTypes`).
+- Tool count: 30 → 34. `saxo_capabilities` discovery covers the new
+  entries.
+
+### Tests
+
+- 4 new unit tests for `findOptionLeg`: clean single-root match,
+  multi-root resolution prefers multi-leg-capable + warns,
+  missing-strike error message lists the available range,
+  `exchangeId` filter narrows candidates.
+- Existing tool-registration test updated for the new tools.
+- 90/90 (was 86).
+
 ## [0.1.6] - 2026-05-19
 
 OAuth now supports PKCE-grant ("public client") apps in addition to
@@ -454,7 +519,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...v0.1.4

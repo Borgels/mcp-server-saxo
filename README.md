@@ -290,6 +290,8 @@ rules.
 | `saxo_list_exchanges` | `GET /ref/v1/exchanges` | List exchanges (or one by ExchangeId). |
 | `saxo_get_option_chain` | `GET /ref/v1/instruments/contractoptionspaces/{optionRootId}` | Strikes + expirations. `normalize=true` (default) pivots Put/Call into one row per strike. |
 | `saxo_list_option_expiries` | (uses option chain) | Cheap helper: just the expiries (date, days, strike count) for an option root. |
+| `saxo_list_standard_option_expiries` | `GET /ref/v1/standarddates/optionexpiry` | Standardized option-expiry calendar (3rd Friday monthlies, quarterlies, weeklies). Distinct from `list_option_expiries`. |
+| `saxo_find_option_leg` | (composes search + chain) | Convenience helper: given symbol + expiry + strike + Call/Put, returns the leg Uic in one call instead of 4. Picks multi-leg-capable root when ambiguous. |
 | `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. Adds `_warning` if `PriceType=NoAccess`. |
 | `saxo_get_infoprices_list` | `GET /trade/v1/infoprices/list` | Snapshot prices for multiple Uics. |
 | `saxo_get_chart` | `GET /chart/v3/charts` | Historical OHLC bars (horizon in minutes). |
@@ -297,8 +299,10 @@ rules.
 | `saxo_estimate_vertical_spread` | (pure math) | Given side + strikes + debit + contracts: max loss, max gain, breakeven, R/R. Applies 100x option multiplier. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
-| `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions. |
+| `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions (one row per fill). |
+| `saxo_list_net_positions` | `GET /port/v1/netpositions/me` | Positions aggregated per instrument (one row per Uic). Right view for current exposure. |
 | `saxo_list_closed_positions` | `GET /port/v1/closedpositions/me` | Closed positions / history. |
+| `saxo_list_activities` | `GET /port/v1/activities` | Recent account events: orders placed/modified/cancelled, trades, dividends, corporate actions. |
 | `saxo_list_orders` | `GET /port/v1/orders/me` | Working orders. |
 | `saxo_get_order` | `GET /port/v1/orders/{orderId}` | One order by id. |
 

@@ -19,6 +19,212 @@ import {
 } from '../src/saxo/reference.js';
 import { inspectAccessToken } from '../src/saxo/session.js';
 
+describe('findOptionLeg compresses 4-step option discovery into one call', () => {
+  it('returns the call Uic for a clean single-root match', async () => {
+    const { findOptionLeg } = await import('../src/saxo/reference.js');
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const u = String(url);
+      if (u.includes('/ref/v1/instruments?')) {
+        return new Response(
+          JSON.stringify({
+            Data: [
+              {
+                AssetType: 'StockOption',
+                Identifier: 1467,
+                ExchangeId: 'OPRA',
+                CanParticipateInMultiLegOrder: true,
+                Symbol: 'NOK:xcbf',
+                Description: 'Nokia Corp.',
+                CurrencyCode: 'USD',
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/ref/v1/instruments/contractoptionspaces/1467')) {
+        return new Response(
+          JSON.stringify({
+            OptionSpace: [
+              {
+                Expiry: '2027-01-15',
+                SpecificOptions: [
+                  { Uic: 53115502, StrikePrice: 15, PutCall: 'Call', TradingStatus: 'Tradable' },
+                  { Uic: 53115503, StrikePrice: 15, PutCall: 'Put', TradingStatus: 'Tradable' },
+                ],
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const leg = await findOptionLeg(client, {
+      symbol: 'NOK',
+      expiry: '2027-01-15',
+      strike: 15,
+      putCall: 'Call',
+    });
+    expect(leg.uic).toBe(53115502);
+    expect(leg.optionRootId).toBe(1467);
+    expect(leg.putCall).toBe('Call');
+    expect(leg.warnings).toEqual([]);
+  });
+
+  it('prefers multi-leg-capable root when multiple roots match, surfaces warning', async () => {
+    const { findOptionLeg } = await import('../src/saxo/reference.js');
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const u = String(url);
+      if (u.includes('/ref/v1/instruments?')) {
+        return new Response(
+          JSON.stringify({
+            Data: [
+              {
+                AssetType: 'StockOption',
+                Identifier: 680,
+                ExchangeId: 'EUREX',
+                CanParticipateInMultiLegOrder: false,
+                Symbol: 'NOKIA:xeur',
+                CurrencyCode: 'EUR',
+              },
+              {
+                AssetType: 'StockOption',
+                Identifier: 1467,
+                ExchangeId: 'OPRA',
+                CanParticipateInMultiLegOrder: true,
+                Symbol: 'NOK:xcbf',
+                CurrencyCode: 'USD',
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/ref/v1/instruments/contractoptionspaces/1467')) {
+        return new Response(
+          JSON.stringify({
+            OptionSpace: [
+              {
+                Expiry: '2027-01-15',
+                SpecificOptions: [
+                  { Uic: 53115502, StrikePrice: 15, PutCall: 'Call' },
+                ],
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const leg = await findOptionLeg(client, {
+      symbol: 'NOK',
+      expiry: '2027-01-15',
+      strike: 15,
+      putCall: 'Call',
+    });
+    // Should pick the OPRA root (Uic 1467) because it's multi-leg-capable
+    expect(leg.optionRootId).toBe(1467);
+    expect(leg.warnings.length).toBe(1);
+    expect(leg.warnings[0]).toMatch(/Multiple option roots matched/);
+  });
+
+  it('throws a helpful error when the requested strike is not in the chain', async () => {
+    const { findOptionLeg } = await import('../src/saxo/reference.js');
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const u = String(url);
+      if (u.includes('/ref/v1/instruments?')) {
+        return new Response(
+          JSON.stringify({
+            Data: [{ AssetType: 'StockOption', Identifier: 1467, ExchangeId: 'OPRA', CanParticipateInMultiLegOrder: true }],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/contractoptionspaces/1467')) {
+        return new Response(
+          JSON.stringify({
+            OptionSpace: [
+              {
+                Expiry: '2027-01-15',
+                SpecificOptions: [
+                  { Uic: 53115502, StrikePrice: 15, PutCall: 'Call' },
+                  { Uic: 57413062, StrikePrice: 20, PutCall: 'Call' },
+                ],
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    await expect(
+      findOptionLeg(client, { symbol: 'NOK', expiry: '2027-01-15', strike: 99, putCall: 'Call' }),
+    ).rejects.toThrow(/Strike 99 not in chain.*range: 15.*20/);
+  });
+
+  it('exchangeId filter narrows the candidates', async () => {
+    const { findOptionLeg } = await import('../src/saxo/reference.js');
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const u = String(url);
+      if (u.includes('/ref/v1/instruments?')) {
+        return new Response(
+          JSON.stringify({
+            Data: [
+              { AssetType: 'StockOption', Identifier: 680,  ExchangeId: 'EUREX' },
+              { AssetType: 'StockOption', Identifier: 1467, ExchangeId: 'OPRA', CanParticipateInMultiLegOrder: true },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (u.includes('/contractoptionspaces/680')) {
+        return new Response(
+          JSON.stringify({
+            OptionSpace: [
+              { Expiry: '2027-01-15', SpecificOptions: [{ Uic: 999, StrikePrice: 15, PutCall: 'Call' }] },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const leg = await findOptionLeg(client, {
+      symbol: 'NOK',
+      expiry: '2027-01-15',
+      strike: 15,
+      putCall: 'Call',
+      exchangeId: 'EUREX',
+    });
+    expect(leg.uic).toBe(999);
+    expect(leg.optionRootId).toBe(680);
+    expect(leg.warnings).toEqual([]); // single match after filter, no ambiguity
+  });
+});
+
 describe('OAuth supports both Code-grant (with secret) and PKCE-grant (no secret) apps', () => {
   it('Code-grant: token exchange uses HTTP Basic auth with app secret', async () => {
     const { exchangeCodeForTokens } = await import('../src/saxo/auth.js');

@@ -122,6 +122,61 @@ export async function listOrders(client: SaxoClient, input: ListOrdersInput): Pr
   });
 }
 
+export interface ListNetPositionsInput {
+  clientKey?: string;
+  accountKey?: string;
+  top?: number;
+  skip?: number;
+  fieldGroups?: string[];
+}
+
+export async function listNetPositions(
+  client: SaxoClient,
+  input: ListNetPositionsInput,
+): Promise<unknown> {
+  if (!input.clientKey && !input.accountKey) {
+    return client.get('/port/v1/netpositions/me', {
+      $top: input.top,
+      $skip: input.skip,
+      FieldGroups: input.fieldGroups?.join(','),
+    });
+  }
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
+  return client.get('/port/v1/netpositions', {
+    ClientKey: clientKey,
+    AccountKey: input.accountKey,
+    $top: input.top,
+    $skip: input.skip,
+    FieldGroups: input.fieldGroups?.join(','),
+  });
+}
+
+export interface ListActivitiesInput {
+  clientKey?: string;
+  accountKey?: string;
+  top?: number;
+  skip?: number;
+  fromDateTime?: string;
+  toDateTime?: string;
+  activityTypes?: string[];
+}
+
+export async function listActivities(
+  client: SaxoClient,
+  input: ListActivitiesInput,
+): Promise<unknown> {
+  const clientKey = input.clientKey ?? (await client.resolveClientKey());
+  return client.get('/port/v1/activities', {
+    ClientKey: clientKey,
+    AccountKey: input.accountKey,
+    $top: input.top,
+    $skip: input.skip,
+    FromDateTime: input.fromDateTime,
+    ToDateTime: input.toDateTime,
+    ActivityTypes: input.activityTypes?.join(','),
+  });
+}
+
 export interface GetOrderInput {
   orderId: string;
   clientKey?: string;
