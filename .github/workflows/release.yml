@@ -98,17 +98,27 @@ jobs:
       #   leaving NODE_AUTH_TOKEN unset / empty makes npm publish fail
       #   fast with 401 in ~7s before OIDC ever runs.
       - name: Configure npm auth
+        # setup-node@v6 with `registry-url` writes its .npmrc to
+        # $RUNNER_TEMP/.npmrc and sets NPM_CONFIG_USERCONFIG to point
+        # there — so any override has to target that exact file, not
+        # the default ~/.npmrc.
         run: |
+          NPMRC_PATH="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          echo "Overwriting npmrc at: $NPMRC_PATH"
           if [ -n "${NPM_TOKEN}" ]; then
             echo "Using NPM_TOKEN secret for publish"
-            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "${HOME}/.npmrc"
+            cat > "$NPMRC_PATH" <<EOF
+          registry=https://registry.npmjs.org/
+          //registry.npmjs.org/:_authToken=${NPM_TOKEN}
+          EOF
           else
             echo "No NPM_TOKEN secret — relying on OIDC trusted publishing"
-            # Replace setup-node's .npmrc with one that only sets registry,
-            # no _authToken. npm CLI with --provenance + id-token: write
-            # will mint a short-lived token via OIDC.
-            echo "registry=https://registry.npmjs.org/" > "${HOME}/.npmrc"
+            cat > "$NPMRC_PATH" <<EOF
+          registry=https://registry.npmjs.org/
+          EOF
           fi
+          echo "--- npmrc contents (token redacted) ---"
+          sed 's/_authToken=.*/_authToken=<REDACTED>/' "$NPMRC_PATH"
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
