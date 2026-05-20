@@ -88,13 +88,32 @@ jobs:
       # `--provenance` records a SLSA attestation linking this exact
       # workflow run to the published artifact. Works with both OIDC
       # (trusted publishing) and NPM_TOKEN auth.
+      #
+      # Auth path:
+      # - If NPM_TOKEN secret is set, use it (bootstrap / token mode).
+      # - Otherwise, rewrite .npmrc to drop the _authToken line so npm
+      #   doesn't try a literal empty token and instead falls through
+      #   to OIDC trusted publishing. setup-node@v6 with registry-url
+      #   writes `_authToken=${NODE_AUTH_TOKEN}` unconditionally;
+      #   leaving NODE_AUTH_TOKEN unset / empty makes npm publish fail
+      #   fast with 401 in ~7s before OIDC ever runs.
+      - name: Configure npm auth
+        run: |
+          if [ -n "${NPM_TOKEN}" ]; then
+            echo "Using NPM_TOKEN secret for publish"
+            echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > "${HOME}/.npmrc"
+          else
+            echo "No NPM_TOKEN secret — relying on OIDC trusted publishing"
+            # Replace setup-node's .npmrc with one that only sets registry,
+            # no _authToken. npm CLI with --provenance + id-token: write
+            # will mint a short-lived token via OIDC.
+            echo "registry=https://registry.npmjs.org/" > "${HOME}/.npmrc"
+          fi
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
       - name: Publish to npm
         run: npm publish --access public --provenance --tag "${{ steps.rel.outputs.npm_tag }}"
-        env:
-          # Only used until trusted publishing is configured on
-          # npmjs.com. After that, this secret can be deleted from the
-          # repo and OIDC handles auth.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       # Reinstall with --omit=dev so the .mcpb only includes runtime
       # deps. mcpb is no longer in node_modules; pull a fresh copy via
