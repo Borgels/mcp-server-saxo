@@ -253,7 +253,7 @@ git clone https://github.com/Borgels/mcp-server-saxo.git
 cd mcp-server-saxo
 npm install
 npm run build           # produces dist/transports/stdio.js
-npm test                # 69 tests
+npm test
 ```
 
 Use `"command": "node", "args": ["/absolute/path/to/dist/transports/stdio.js"]`
@@ -270,6 +270,87 @@ safety notes without contacting Saxo.
 { "query": "place order", "limit": 5 }
 ```
 
+### Optional Alpha Vantage enrichment
+
+The strategy screeners are Saxo-first. They work without third-party data using
+Saxo instruments, prices, chart bars, option chains, and account/position
+context. If `ALPHA_VANTAGE_API_KEY` is set, stock and option strategy tools can
+optionally enrich candidates with Alpha Vantage `OVERVIEW`,
+`NEWS_SENTIMENT`, and `EARNINGS_CALENDAR`.
+
+Leave `ALPHA_VANTAGE_API_KEY` unset to keep the server Saxo-only. Alpha
+Vantage is optional because tiers and rate limits vary. For deeper research,
+run Alpha Vantage's own MCP server beside this Saxo server and pass normalized
+research into `externalContextBySymbol`.
+
+### Strategy and portfolio planning
+
+Use `saxo_screen_stock_strategies` when you want ranked stock ideas with
+account-aware sizing, Saxo quote/liquidity data, Saxo chart context, optional
+fundamentals/news enrichment, risks, and decision briefs:
+
+```json
+{
+  "accountKey": "your-account-key",
+  "market": "us",
+  "universe": "large_cap",
+  "objective": "balanced",
+  "riskProfile": "balanced",
+  "includeAccountContext": true,
+  "includeFundamentalContext": true,
+  "riskBudgetPercentPerIdea": 1,
+  "maxSingleNamePercent": 10,
+  "maxResults": 10
+}
+```
+
+Use `saxo_screen_option_strategies` when you want the server to find
+optionable underlyings first and then rank account-aware option strategy plans:
+
+```json
+{
+  "accountKey": "your-account-key",
+  "market": "us_nasdaq",
+  "underlyingUniverse": "auto",
+  "playbook": "income_30_60d",
+  "riskProfile": "balanced",
+  "includeAccountContext": true,
+  "riskBudgetPercent": 1,
+  "maxUnderlyings": 50,
+  "maxUnderlyingScan": 500,
+  "maxSymbolsToPlan": 5,
+  "maxPlans": 10
+}
+```
+
+Use `saxo_plan_portfolio_strategy` for whole-account deployment. It reads the
+account snapshot, runs the stock and option screeners, then returns target
+allocation, staged deployment, stock allocation, option satellite candidates,
+sector exposure, and portfolio-level risk warnings:
+
+```json
+{
+  "accountKey": "your-account-key",
+  "objective": "balanced_growth_income",
+  "riskProfile": "balanced",
+  "deploymentStyle": "staged",
+  "targetInvestedPercent": 80,
+  "cashReservePercent": 10,
+  "maxSingleNamePercent": 10,
+  "maxSectorPercent": 35,
+  "maxOptionsRiskPercent": 5,
+  "riskBudgetPercentPerIdea": 1,
+  "includeStocks": true,
+  "includeOptions": true
+}
+```
+
+Portfolio planning is read-only. It never calls precheck or places orders.
+Stock allocation de-duplicates issuer/share-class duplicates such as
+`GOOG`/`GOOGL`. `maxSectorPercent` is enforced when sector data is available
+from fundamentals context; otherwise the response includes a warning instead
+of pretending sector caps were applied.
+
 ## Tools
 
 All tools are registered with MCP annotations (`readOnlyHint`,
@@ -285,6 +366,7 @@ rules.
 | `saxo_capabilities` | — | Discover tools without calling Saxo. |
 | `saxo_session_me` | `GET /port/v1/users/me` | Authenticated user (Name, ClientKey, UserKey, MarketDataViaOpenApiTermsAccepted). |
 | `saxo_diagnostics` | (aggregated) | Session + capabilities + token expiry + warnings (market-data terms, DataLevel, token close to expiry). |
+| `saxo_feature_availability` | `GET /root/v1/features/availability` | Inspect Saxo feature flags for News, Calendar, Gainers/Losers, and Chart. |
 | `saxo_search_instruments` | `GET /ref/v1/instruments` | Search by keyword + asset type. |
 | `saxo_get_instrument_details` | `GET /ref/v1/instruments/details` | Detailed metadata for one or many Uics. |
 | `saxo_list_exchanges` | `GET /ref/v1/exchanges` | List exchanges (or one by ExchangeId). |
@@ -295,8 +377,13 @@ rules.
 | `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. Adds `_warning` if `PriceType=NoAccess`. |
 | `saxo_get_infoprices_list` | `GET /trade/v1/infoprices/list` | Snapshot prices for multiple Uics. |
 | `saxo_get_chart` | `GET /chart/v3/charts` | Historical OHLC bars (horizon in minutes). |
+| `saxo_screen_market` | Saxo instruments + info prices | User-friendly top gainers/losers and pre-market screeners. |
 | `saxo_compute_spread_quote` | (uses infoprices) | Fetch bid/ask per leg and compute worst-case, mid, best-case net debit for a multi-leg spread. |
 | `saxo_estimate_vertical_spread` | (pure math) | Given side + strikes + debit + contracts: max loss, max gain, breakeven, R/R. Applies 100x option multiplier. |
+| `saxo_plan_option_strategy` | Option chain + prices | Opinionated read-only option strategy plans. |
+| `saxo_screen_option_strategies` | Market screener + chart TA + OptionsChain IV + planner | Cross-symbol options strategy screening. |
+| `saxo_screen_stock_strategies` | Saxo instruments + prices + chart TA + optional fundamentals/news | Opinionated stock strategy screening with decision briefs. |
+| `saxo_plan_portfolio_strategy` | Account snapshot + stock/options screeners | Whole-account target allocation, staged deployment, and risk dashboard. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
 | `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions (one row per fill). |

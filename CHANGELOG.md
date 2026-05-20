@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0-rc.1] - 2026-05-21
+
+Release candidate for the strategy-screening and portfolio-planning release.
+This release keeps all strategy tools read-only: no new tool places orders or
+calls precheck.
+
+### Added
+
+- `saxo_screen_market`, a user-friendly Saxo-only market screener for top
+  gainers, top losers, pre-market gainers, and pre-market losers.
+- `saxo_plan_option_strategy` and `saxo_screen_option_strategies`, providing
+  option strategy planning, cross-symbol screening, playbooks, account-aware
+  sizing, Saxo chart context, Saxo OptionsChain IV context, optional
+  Alpha Vantage news/earnings context, and decision briefs.
+- `saxo_screen_stock_strategies`, an opinionated stock strategy screener with
+  Saxo quote/liquidity data, chart-derived technical context, account-aware
+  sizing, optional Alpha Vantage fundamentals/news enrichment, ranking
+  breakdowns, risks, and decision briefs.
+- `saxo_plan_portfolio_strategy`, a whole-account planner with account
+  snapshot, target allocation, staged deployment, stock allocation plan, option
+  satellite plan, issuer/share-class de-duplication, sector caps, and a
+  portfolio risk dashboard.
+- `saxo_feature_availability`, a diagnostic tool for Saxo feature flags such as
+  News, Calendar, Gainers/Losers, and Chart.
+- Optional Alpha Vantage enrichment via `ALPHA_VANTAGE_API_KEY` for
+  `OVERVIEW`, `NEWS_SENTIMENT`, and `EARNINGS_CALENDAR`.
+
+### Changed
+
+- Portfolio planning now distinguishes per-trade risk budgets from portfolio
+  stock allocation, so core positions can deploy toward account-level targets
+  while tactical/options ideas remain risk-budgeted.
+- Stock screening batches price requests and only enriches the best pre-ranked
+  candidates with higher-cost context to reduce Saxo rate-limit pressure.
+- Portfolio allocation supports `maxSectorPercent` and reports
+  `sectorExposure`; sector caps are enforced when sector/fundamentals data is
+  available and surfaced as a warning when it is not.
+- Documentation now covers the Saxo-first data model, optional Alpha Vantage
+  enrichment, unstructured research sidecar workflow, strategy screeners, and
+  whole-account planning.
+
+### Fixed
+
+- `saxo_session_me` uses the correct Saxo user/session endpoint.
+- Account-aware screeners resolve ClientKey before balance lookup and use the
+  portfolio `/me` endpoints where Saxo rejects account-key-filtered requests.
+- Rejected option ideas no longer count as planned portfolio option risk.
+- Alpha Vantage provider errors redact API keys before returning warnings.
+
+### Security
+
+- All strategy, screening, and portfolio-planning tools are registered and
+  allowlisted as read-only tools.
+
 ## [0.1.2] - 2026-05-20
 
 First follow-up to the npm publish of 0.1.1. Two themes:
@@ -393,7 +447,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.2.0-rc.1...HEAD
+[0.2.0-rc.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.2.0-rc.1
 [0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Borgels/mcp-server-saxo/releases/tag/v0.1.0

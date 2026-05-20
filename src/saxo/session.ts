@@ -16,6 +16,12 @@ export interface SaxoSessionInfo {
   [key: string]: unknown;
 }
 
+export interface SaxoFeatureAvailability {
+  Feature: 'News' | 'GainersLosers' | 'Calendar' | 'Chart' | string;
+  Available: boolean;
+  [key: string]: unknown;
+}
+
 export function getSessionMe(client: SaxoClient): Promise<SaxoSessionInfo> {
   return client.get<SaxoSessionInfo>('/port/v1/users/me');
 }
@@ -183,4 +189,8 @@ export function inspectAccessToken(token: string | undefined): TokenInfo {
   } catch {
     return { decoded: false };
   }
+}
+
+export function getFeatureAvailability(client: SaxoClient): Promise<SaxoFeatureAvailability[]> {
+  return client.get<SaxoFeatureAvailability[]>('/root/v1/features/availability');
 }

@@ -16,6 +16,9 @@ import {
   getInfoPrice,
   getInfoPricesList,
 } from '../saxo/prices.js';
+import { planOptionStrategy } from '../saxo/options.js';
+import { screenOptionStrategies } from '../saxo/option-strategy-screener.js';
+import { planPortfolioStrategy } from '../saxo/portfolio-strategy.js';
 import {
   getBalance,
   getOrder,
@@ -44,7 +47,9 @@ import {
   normalizeOptionChain,
   searchInstruments,
 } from '../saxo/reference.js';
-import { getDiagnostics, getSessionMe } from '../saxo/session.js';
+import { screenMarket } from '../saxo/screener.js';
+import { screenStockStrategies } from '../saxo/stock-strategy-screener.js';
+import { getDiagnostics, getFeatureAvailability, getSessionMe } from '../saxo/session.js';
 import {
   cancelMultiLegOrder,
   cancelOrder,
@@ -145,6 +150,231 @@ const modifyMultiLegOrderSchema = z.object({
   OrderPrice: z.number().optional(),
 });
 
+const screenMarketSchema = z.object({
+  preset: z.enum(['top_gainers', 'top_losers', 'premarket_gainers', 'premarket_losers']),
+  market: z
+    .enum(['us', 'us_nasdaq', 'us_nyse', 'denmark', 'sweden', 'norway', 'finland', 'nordics', 'europe'])
+    .default('us'),
+  exchangeIds: z.array(z.string().trim().min(1)).max(20).optional(),
+  assetType: z.string().trim().min(1).default('Stock'),
+  limit: z.number().int().min(1).max(50).default(10),
+  maxInstruments: z.number().int().min(1).max(500).default(200),
+  accountKey: z.string().trim().min(1).optional(),
+  includeNonTradable: z.boolean().default(false),
+});
+
+const putCallSchema = z.enum(['Put', 'Call']);
+const optionStrategySchema = z.enum([
+  'cash_secured_put',
+  'put_credit_spread',
+  'call_credit_spread',
+  'debit_spread',
+  'iron_condor',
+]);
+const strategyPlaybookSchema = z.enum([
+  'income_30_60d',
+  'aggressive_short_term',
+  'earnings_defined_risk',
+  'long_term_directional',
+  'leaps_replacement',
+  'quality_put_write',
+]);
+const riskProfileSchema = z.enum(['conservative', 'balanced', 'aggressive']);
+const tradeObjectiveSchema = z.enum([
+  'income',
+  'directional',
+  'volatility',
+  'stock_replacement',
+  'capital_preservation',
+]);
+const underlyingUniverseSchema = z.enum([
+  'auto',
+  'single_preset',
+  'bullish_movers',
+  'bearish_movers',
+  'two_sided_movers',
+]);
+const directionalBiasSchema = z.enum(['bullish', 'bearish', 'neutral']);
+const newsProviderSchema = z.enum(['auto', 'none', 'alpha_vantage']);
+const marketSentimentSchema = z.enum(['bullish', 'bearish', 'neutral', 'mixed', 'unknown']);
+const stockStrategyObjectiveSchema = z.enum([
+  'core_growth',
+  'tactical_momentum',
+  'quality_value',
+  'defensive',
+  'balanced',
+]);
+const stockUniverseSchema = z.enum(['auto', 'large_cap', 'movers', 'watchlist', 'symbols']);
+const portfolioObjectiveSchema = z.enum([
+  'balanced_growth_income',
+  'income_options',
+  'capital_preservation',
+  'growth',
+]);
+const deploymentStyleSchema = z.enum(['staged', 'immediate', 'watchlist']);
+
+const marketNewsContextSchema = z.object({
+  source: z.enum(['alpha_vantage', 'external']).default('external'),
+  provider: z.string().trim().min(1).default('external'),
+  symbol: z.string().trim().min(1),
+  generatedAt: z.string().trim().default(() => new Date().toISOString()),
+  lookbackDays: z.number().int().min(1).max(365).default(7),
+  headlineCount: z.number().int().min(0).default(0),
+  sentiment: marketSentimentSchema,
+  sentimentScore: z.number().optional(),
+  latestPublishedAt: z.string().trim().optional(),
+  catalystTags: z.array(z.string().trim().min(1)).max(50).default([]),
+  riskNotes: z.array(z.string().trim().max(500)).max(20).default([]),
+  summary: z.string().trim().max(4000).optional(),
+  headlines: z
+    .array(z.object({
+      title: z.string().trim().min(1).max(1000),
+      source: z.string().trim().optional(),
+      url: z.string().trim().optional(),
+      publishedAt: z.string().trim().optional(),
+      sentiment: marketSentimentSchema.optional(),
+      sentimentScore: z.number().optional(),
+      relevanceScore: z.number().optional(),
+    }))
+    .max(20)
+    .default([]),
+  earnings: z
+    .object({
+      reportDate: z.string().trim().optional(),
+      fiscalDateEnding: z.string().trim().optional(),
+      estimate: z.number().optional(),
+      currency: z.string().trim().optional(),
+      daysUntil: z.number().int().optional(),
+    })
+    .optional(),
+});
+
+const optionStrategyPlanSchema = z.object({
+  keywords: z.string().trim().min(1).optional(),
+  optionRootId: z.number().int().positive().optional(),
+  accountKey: z.string().trim().min(1),
+  minDte: z.number().int().min(0).max(3650).optional(),
+  maxDte: z.number().int().min(0).max(3650).optional(),
+  strikeWindowPercent: z.number().positive().max(1000).optional(),
+  putCall: putCallSchema.optional(),
+  limitExpiries: z.number().int().min(1).max(50).optional(),
+  limitStrikesPerExpiry: z.number().int().min(1).max(200).optional(),
+  strategies: z.array(optionStrategySchema).min(1).max(5).optional(),
+  maxCandidates: z.number().int().min(1).max(25).optional(),
+  riskBudget: z.number().positive().optional(),
+  minOpenInterest: z.number().int().min(0).optional(),
+  maxSpreadPercent: z.number().positive().max(1000).optional(),
+  includeVolatilityContext: z.boolean().optional(),
+  externalContext: z
+    .object({
+      summary: z.string().trim().max(4000).optional(),
+      sentiment: directionalBiasSchema.optional(),
+      technicalBias: directionalBiasSchema.optional(),
+      news: marketNewsContextSchema.optional(),
+      riskNotes: z.array(z.string().trim().max(500)).max(20).optional(),
+    })
+    .optional(),
+  directionalBias: directionalBiasSchema.optional(),
+});
+
+const externalStrategyContextSchema = z.object({
+  summary: z.string().trim().max(4000).optional(),
+  sentiment: directionalBiasSchema.optional(),
+  technicalBias: directionalBiasSchema.optional(),
+  news: marketNewsContextSchema.optional(),
+  riskNotes: z.array(z.string().trim().max(500)).max(20).optional(),
+});
+
+const optionStrategyScreenerSchema = z.object({
+  accountKey: z.string().trim().min(1),
+  market: z.enum(['us', 'us_nasdaq', 'us_nyse']).default('us'),
+  symbols: z.array(z.string().trim().min(1)).max(50).optional(),
+  underlyingUniverse: underlyingUniverseSchema.default('auto'),
+  underlyingPreset: z.enum(['top_gainers', 'top_losers', 'premarket_gainers', 'premarket_losers']).optional(),
+  playbook: strategyPlaybookSchema.default('income_30_60d'),
+  riskProfile: riskProfileSchema.default('balanced'),
+  objective: tradeObjectiveSchema.optional(),
+  strategies: z.array(optionStrategySchema).min(1).max(5).optional(),
+  minDte: z.number().int().min(0).max(3650).optional(),
+  maxDte: z.number().int().min(0).max(3650).optional(),
+  maxUnderlyings: z.number().int().min(1).max(50).default(50),
+  maxUnderlyingScan: z.number().int().min(1).max(500).default(500),
+  maxSymbolsToPlan: z.number().int().min(1).max(10).default(5),
+  maxPlans: z.number().int().min(1).max(25).default(10),
+  riskBudget: z.number().positive().optional(),
+  includeAccountContext: z.boolean().default(true),
+  riskBudgetPercent: z.number().positive().max(100).default(1),
+  maxPortfolioRiskPercent: z.number().positive().max(100).default(5),
+  maxSymbolExposurePercent: z.number().positive().max(100).default(10),
+  allowExistingExposureIncrease: z.boolean().default(false),
+  minOpenInterest: z.number().int().min(0).optional(),
+  maxSpreadPercent: z.number().positive().max(1000).optional(),
+  includeTechnicalContext: z.boolean().default(true),
+  includeVolatilityContext: z.boolean().default(true),
+  includeNewsContext: z.boolean().default(false),
+  newsProvider: newsProviderSchema.default('auto'),
+  newsLookbackDays: z.number().int().min(1).max(30).default(7),
+  newsLimit: z.number().int().min(1).max(50).default(20),
+  earningsHorizon: z.enum(['3month', '6month', '12month']).default('3month'),
+  technicalHorizon: z.number().int().min(1).max(10080).default(1440),
+  technicalBars: z.number().int().min(20).max(1200).default(90),
+  externalContextBySymbol: z.record(z.string(), externalStrategyContextSchema).optional(),
+});
+
+const stockStrategyScreenerSchema = z.object({
+  accountKey: z.string().trim().min(1),
+  market: z.enum(['us', 'us_nasdaq', 'us_nyse']).default('us'),
+  symbols: z.array(z.string().trim().min(1)).max(50).optional(),
+  excludeSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
+  universe: stockUniverseSchema.default('auto'),
+  objective: stockStrategyObjectiveSchema.default('balanced'),
+  riskProfile: riskProfileSchema.default('balanced'),
+  maxResults: z.number().int().min(1).max(25).default(10),
+  maxCandidates: z.number().int().min(1).max(500).default(120),
+  maxTechnicalCandidates: z.number().int().min(0).max(100).default(25),
+  includeAccountContext: z.boolean().default(true),
+  riskBudgetPercentPerIdea: z.number().positive().max(100).default(1),
+  maxSingleNamePercent: z.number().positive().max(100).default(10),
+  allowExistingExposureIncrease: z.boolean().default(false),
+  includeTechnicalContext: z.boolean().default(true),
+  includeFundamentalContext: z.boolean().default(true),
+  fundamentalProvider: newsProviderSchema.default('auto'),
+  fundamentalsLimit: z.number().int().min(0).max(50).default(12),
+  includeNewsContext: z.boolean().default(false),
+  newsProvider: newsProviderSchema.default('auto'),
+  newsLookbackDays: z.number().int().min(1).max(30).default(7),
+  newsLimit: z.number().int().min(1).max(50).default(10),
+  technicalHorizon: z.number().int().min(1).max(10080).default(1440),
+  technicalBars: z.number().int().min(20).max(1200).default(90),
+  externalContextBySymbol: z.record(z.string(), z.object({
+    summary: z.string().trim().max(4000).optional(),
+    sentiment: directionalBiasSchema.optional(),
+    riskNotes: z.array(z.string().trim().max(500)).max(20).optional(),
+    news: marketNewsContextSchema.optional(),
+  })).optional(),
+});
+
+const portfolioStrategySchema = z.object({
+  accountKey: z.string().trim().min(1),
+  objective: portfolioObjectiveSchema.default('balanced_growth_income'),
+  riskProfile: riskProfileSchema.default('balanced'),
+  deploymentStyle: deploymentStyleSchema.default('staged'),
+  targetInvestedPercent: z.number().positive().max(100).optional(),
+  cashReservePercent: z.number().min(0).max(95).optional(),
+  maxSingleNamePercent: z.number().positive().max(100).default(10),
+  maxSectorPercent: z.number().positive().max(100).default(35),
+  maxOptionsRiskPercent: z.number().min(0).max(100).default(5),
+  riskBudgetPercentPerIdea: z.number().positive().max(100).default(1),
+  includeStocks: z.boolean().default(true),
+  includeOptions: z.boolean().default(true),
+  stockSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
+  optionSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
+  maxStockIdeas: z.number().int().min(1).max(25).default(8),
+  maxOptionIdeas: z.number().int().min(1).max(25).default(6),
+  includeNewsContext: z.boolean().default(false),
+  includeFundamentalContext: z.boolean().default(true),
+});
+
 export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   server.registerTool(
     'saxo_capabilities',
@@ -190,6 +420,21 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async () =>
       runAuditedTool(client, 'saxo_diagnostics', {}, async () =>
         jsonToolResult(await getDiagnostics(client)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_feature_availability',
+    {
+      title: 'Get Saxo Feature Availability',
+      description:
+        'Return Saxo feature flags for News, Calendar, Gainers/Losers, and Chart. Diagnostic only: availability flags do not guarantee that every feature has a public documented endpoint exposed by this MCP server.',
+      inputSchema: {},
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async () =>
+      runAuditedTool(client, 'saxo_feature_availability', {}, async () =>
+        jsonToolResult(await getFeatureAvailability(client)),
       ),
   );
 
@@ -414,6 +659,21 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 
   server.registerTool(
+    'saxo_screen_market',
+    {
+      title: 'Screen Market',
+      description:
+        'User-friendly read-only market screener for presets like top gainers, top losers, pre-market gainers, and pre-market losers. Uses Saxo instruments and InfoPrices only; output depends on market-data permissions and delay settings.',
+      inputSchema: screenMarketSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_screen_market', input, async () =>
+        jsonToolResult(await screenMarket(client, input)),
+      ),
+  );
+
+  server.registerTool(
     'saxo_compute_spread_quote',
     {
       title: 'Compute Spread Quote',
@@ -460,6 +720,66 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_estimate_vertical_spread', input, async () =>
         jsonToolResult(estimateVerticalSpread(input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_plan_option_strategy',
+    {
+      title: 'Plan Option Strategy',
+      description:
+        'Opinionated read-only options strategy planner for cash-secured puts, vertical spreads, debit spreads, and iron condors. Can include Saxo OptionsChain IV rank/percentile context. Returns ranked trade plans and precheck drafts; does not call precheck or place orders.',
+      inputSchema: optionStrategyPlanSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_plan_option_strategy', input, async () =>
+        jsonToolResult(await planOptionStrategy(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_screen_option_strategies',
+    {
+      title: 'Screen Option Strategies',
+      description:
+        'Opinionated read-only screener that finds liquid US stock underlyings, derives Saxo chart, OptionsChain IV, and account-aware sizing context, can optionally enrich with Alpha Vantage news/earnings, runs option strategy planning, and returns ranked plans plus decision briefs. Saxo-only by default; does not call precheck or place orders.',
+      inputSchema: optionStrategyScreenerSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_screen_option_strategies', input, async () =>
+        jsonToolResult(await screenOptionStrategies(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_screen_stock_strategies',
+    {
+      title: 'Screen Stock Strategies',
+      description:
+        'Opinionated read-only stock strategy screener with Saxo quotes, chart-based technical context, account-aware sizing, optional Alpha Vantage fundamentals/news, and decision briefs. Does not call precheck or place orders.',
+      inputSchema: stockStrategyScreenerSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_screen_stock_strategies', input, async () =>
+        jsonToolResult(await screenStockStrategies(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_plan_portfolio_strategy',
+    {
+      title: 'Plan Portfolio Strategy',
+      description:
+        'Read-only whole-account portfolio strategy planner. Combines account snapshot, stock strategy screening, option strategy screening, risk caps, target allocation, and staged deployment into one decision package. Does not call precheck or place orders.',
+      inputSchema: portfolioStrategySchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_plan_portfolio_strategy', input, async () =>
+        jsonToolResult(await planPortfolioStrategy(client, input)),
       ),
   );
 

@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "mcp-server-saxo",
   "display_name": "Saxo Bank OpenAPI",
-  "version": "0.1.2",
+  "version": "0.2.0-rc.1",
   "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
-  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. 30 tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, single-leg and multi-leg option orders, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
+  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, single-leg and multi-leg option orders, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
   "author": {
     "name": "Borgels",
     "url": "https://github.com/Borgels"
@@ -47,6 +47,7 @@
         "SAXO_APP_SECRET": "${user_config.SAXO_APP_SECRET}",
         "SAXO_REDIRECT_URI": "${user_config.SAXO_REDIRECT_URI}",
         "SAXO_TIMEOUT_MS": "${user_config.SAXO_TIMEOUT_MS}",
+        "ALPHA_VANTAGE_API_KEY": "${user_config.ALPHA_VANTAGE_API_KEY}",
         "SAXO_ENABLE_LIVE_TRADING": "${user_config.SAXO_ENABLE_LIVE_TRADING}",
         "SAXO_POLICY_PATH": "${user_config.SAXO_POLICY_PATH}",
         "SAXO_AUDIT_LOG": "${user_config.SAXO_AUDIT_LOG}"
@@ -110,6 +111,13 @@
       "default": 30000,
       "min": 1000,
       "max": 120000
+    },
+    "ALPHA_VANTAGE_API_KEY": {
+      "type": "string",
+      "title": "Alpha Vantage API key",
+      "description": "Optional. Enables Alpha Vantage OVERVIEW fundamentals plus NEWS_SENTIMENT and EARNINGS_CALENDAR when strategy tools opt into that enrichment. Leave blank to keep screening Saxo-only.",
+      "required": false,
+      "sensitive": true
     },
     "SAXO_ENABLE_LIVE_TRADING": {
       "type": "boolean",
