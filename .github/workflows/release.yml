@@ -122,8 +122,28 @@ jobs:
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Diagnostic — OIDC + npm state
+        run: |
+          echo "::group::env vars"
+          echo "NPM_CONFIG_USERCONFIG=${NPM_CONFIG_USERCONFIG:-<unset>}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL present: $([ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && echo yes || echo no)"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN present: $([ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] && echo yes || echo no)"
+          echo "::endgroup::"
+          echo "::group::npmrc (redacted)"
+          NPMRC_PATH="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$NPMRC_PATH" ]; then
+            sed 's/_authToken=.*/_authToken=<REDACTED>/' "$NPMRC_PATH"
+          else
+            echo "(no npmrc at $NPMRC_PATH)"
+          fi
+          echo "::endgroup::"
+          echo "::group::npm + node versions"
+          node --version
+          npm --version
+          echo "::endgroup::"
+
       - name: Publish to npm
-        run: npm publish --access public --provenance --tag "${{ steps.rel.outputs.npm_tag }}"
+        run: npm publish --access public --provenance --tag "${{ steps.rel.outputs.npm_tag }}" --loglevel verbose
 
       # Reinstall with --omit=dev so the .mcpb only includes runtime
       # deps. mcpb is no longer in node_modules; pull a fresh copy via
