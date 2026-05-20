@@ -85,9 +85,9 @@ jobs:
 
       # Publish to npm BEFORE rebuilding node_modules — `prepack`
       # runs typecheck + test + build, which need devDependencies.
-      # `--provenance` records a SLSA attestation linking this exact
-      # workflow run to the published artifact. Works with both OIDC
-      # (trusted publishing) and NPM_TOKEN auth.
+      # Trusted publishing requires npm CLI 11.5.1+ and automatically
+      # records provenance for public packages, so run publish through
+      # that CLI without self-upgrading the runner's bundled npm.
       #
       # Auth path:
       # - If NPM_TOKEN secret is set, use it (bootstrap / token mode).
@@ -143,7 +143,7 @@ jobs:
           echo "::endgroup::"
 
       - name: Publish to npm
-        run: npm publish --access public --provenance --tag "${{ steps.rel.outputs.npm_tag }}" --loglevel verbose
+        run: npx -y npm@^11.5.1 publish --access public --tag "${{ steps.rel.outputs.npm_tag }}" --loglevel verbose
 
       # Reinstall with --omit=dev so the .mcpb only includes runtime
       # deps. mcpb is no longer in node_modules; pull a fresh copy via
