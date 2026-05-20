@@ -7,275 +7,149 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.7] - 2026-05-19
+## [0.1.2] - 2026-05-20
 
-Two themes: prove the multi-leg write path actually works against live
-SIM (we'd only ever validated precheck before), and add the
-highest-value missing tools the LLM driver was asking for via chatty
-multi-step flows.
+First follow-up to the npm publish of 0.1.1. Two themes:
 
-### Verified live (no code changes for this part)
+- **Bug fixes** caught by exercising 0.1.1 end-to-end against live
+  Saxo SIM through the actual MCPB extension in Claude Desktop. A
+  handful of these were "the server crashes on first call"
+  fundamental — 0.1.1 worked when driven by `npm run smoke:live`
+  but broke under real MCPB-driven invocation (env-var
+  substitution, ClientKey requirements, etc.).
+- **Four new tools** rounding out portfolio visibility and
+  collapsing the chatty option-discovery workflow.
 
-- Multi-leg write path end-to-end against live Saxo SIM:
-  place → list → modify → cancel for a NOK Jan 15 2027 15/20 call
-  spread (1 contract @ 0.05 → modified to 0.07 → cancelled).
-  - Place: HTTP 201 with `MultiLegOrderId` + per-leg `Orders[].OrderId`
-  - Modify: HTTP 200, response carries `MultiLegOrderId`
-  - Cancel: HTTP 200, `Orders: [{ MultiLegOrderId }]`
-  - Cash balance unchanged after the round trip (no margin held)
-  - `listOrders` shows the per-leg orders but doesn't surface
-    `MultiLegOrderId` on the leg objects — known Saxo quirk;
-    reconstruct the group via per-order detail if needed.
+### Fixed
 
-### Added — three Saxo endpoints + one convenience helper
+- **MCPB extension crashed on first tool call.** Claude Desktop
+  substitutes `${user_config.NAME}` in the spawned env block only
+  for fields the user filled in; optional fields left blank are
+  passed through as the literal template string. The server then
+  tried to use those literal strings as paths (`SAXO_POLICY_PATH`
+  blew up first, with `loadPolicy()` calling
+  `readFileSync('${user_config.SAXO_POLICY_PATH}')` against
+  `C:\Windows\system32\`) and tokens. New
+  [src/saxo/env.ts](src/saxo/env.ts) helpers (`readEnv`,
+  `readBoolEnv`, `readNumberEnv`) treat any value starting with
+  `${user_config.` as unset, wired into every `SAXO_*` read site
+  across `policy.ts`, `audit.ts`, `client.ts`, `oauth.ts`,
+  `session.ts`. Without this fix, the MCPB bundle in 0.1.1 was
+  effectively unusable in Claude Desktop.
+- **`saxo_compute_spread_quote.bidAskWidth` returned fp noise.**
+  The helper used the same signed aggregator as the price fields,
+  which flips the sign on sell legs — mathematically wrong for
+  widths. Symmetric option spreads cancelled to ~4e-16 instead of
+  summing to the correct width. Replaced with `sumWidths()` that
+  sums `|ask − bid|` across legs. Identity `bidAskWidth =
+  worstCaseDebit − bestCaseDebit` now holds.
+- **`saxo_get_option_chain` `expiryDates` filter was ignored.**
+  Saxo's API returns the full `OptionSpace` array with strike data
+  populated for every expiry, regardless of the `ExpiryDates`
+  query parameter. `getOptionChain` now filters the response
+  client-side, so `expiryDates: ['2027-01-15']` actually returns
+  just that expiry.
+- **All `/port/v1/*` endpoints required `ClientKey` alongside
+  `AccountKey`** — when the LLM driver passed only `accountKey`
+  (the natural pattern), Saxo rejected with `"The ClientKey field
+  is required."` Added `SaxoClient.resolveClientKey()` (lazy,
+  cached, fetched from the session) and a fallback in
+  `getBalance`, `listPositions`, `listClosedPositions`,
+  `listOrders`, `getOrder`.
+- **Multi-leg `OrderPrice` docs claimed negative was valid** for
+  credit spreads. Saxo's API actually rejects negative values with
+  `"Price cannot be negative."` (verified live). Updated tool
+  descriptions, capabilities entries, and README. `OrderPrice` is
+  always positive; debit vs credit is implicit in each leg's
+  `BuySell`. `saxo_compute_spread_quote.midDebit` /
+  `worstCaseDebit` / `bestCaseDebit` can still be negative (net
+  credit); LLM drivers should `Math.abs()` before passing to a
+  place_* call.
 
-- `saxo_list_net_positions` — `/port/v1/netpositions/{me}`. Positions
-  aggregated per instrument, one row per Uic with the net amount.
-  Right view for "what's my current exposure?" without manual
-  deduplication. Uses the same ClientKey auto-resolve as the other
-  `/port/v1/*` reads.
-- `saxo_list_activities` — `/port/v1/activities`. Recent account
-  events (placed/modified/cancelled orders, trades, dividend
-  payments, corporate actions). Pass `fromDateTime` / `toDateTime`
-  (ISO 8601) to scope; `$top` / `$skip` for paging.
-- `saxo_list_standard_option_expiries` —
-  `/ref/v1/standarddates/optionexpiry`. The standardized option-
-  expiry calendar (3rd Friday monthlies, quarterlies, weeklies).
-  Distinct from `saxo_list_option_expiries`, which is per-option-root.
-  Useful for "is this a standard monthly?" reasoning.
-- `saxo_find_option_leg` (convenience helper, pure composition) —
-  given `symbol + expiry + strike + Call/Put` (+ optional
-  `exchangeId`), returns the option leg Uic. Compresses the 4-step
-  option-discovery workflow (search instrument → search option root
-  → fetch chain → locate strike) into one call. When multiple option
-  roots match (e.g. `NOK` has both US OPRA and Helsinki/EUREX
-  options), prefers the multi-leg-capable root and surfaces
-  alternatives in `warnings[]`.
+### Added — OAuth PKCE support
 
-### Changed
-
-- `saxo_list_positions` description now mentions
-  `saxo_list_net_positions` as the right alternative when you want
-  the aggregated view.
-- Audit log target capture extended to include the new fields
-  (`symbol`, `expiry`, `strike`, `putCall`, `fromDateTime`,
-  `toDateTime`, `activityTypes`).
-- Tool count: 30 → 34. `saxo_capabilities` discovery covers the new
-  entries.
-
-### Tests
-
-- 4 new unit tests for `findOptionLeg`: clean single-root match,
-  multi-root resolution prefers multi-leg-capable + warns,
-  missing-strike error message lists the available range,
-  `exchangeId` filter narrows candidates.
-- Existing tool-registration test updated for the new tools.
-- 90/90 (was 86).
-
-## [0.1.6] - 2026-05-19
-
-OAuth now supports PKCE-grant ("public client") apps in addition to
-Code-grant ("confidential client") apps. Previously the wrapper
-hard-required `SAXO_APP_SECRET` and always sent HTTP Basic auth,
-which would have failed against a PKCE-only Saxo app.
-
-### Added
+Previously the wrapper hard-required `SAXO_APP_SECRET` and always
+sent HTTP Basic Auth. That works for Saxo's "Code" grant
+(confidential client) but fails against the "PKCE" grant (public
+client), which has no secret to send.
 
 - `exchangeCodeForTokens` and `refreshAccessToken` now branch on
-  whether `appSecret` is present:
-  - **With secret (Code grant / confidential client):** unchanged —
-    HTTP Basic Authorization header carries `client_id:secret`.
-  - **Without secret (PKCE grant / public client):** no Authorization
-    header; `client_id` goes into the form body alongside
-    `code_verifier` (per RFC 6749 §2.3.1).
-- `loadOauthConfigFromEnv` no longer throws when `SAXO_APP_SECRET` is
-  missing; only `SAXO_APP_KEY` is required.
-- `SaxoClient.hasRefreshCredentials()` returns true for PKCE clients
-  (just `refreshToken + appKey`), so proactive refresh works for both
-  flows.
-- Manifest's `SAXO_APP_SECRET` user_config field is now formally
-  optional — the description already implied that ("required when
-  using OAuth refresh"); the runtime now matches.
+  `appSecret` presence: with secret → HTTP Basic Authorization
+  header carrying `client_id:secret` (Code grant, unchanged);
+  without → no Authorization header, `client_id` in the form body
+  (PKCE grant, public client, per RFC 6749 §2.3.1).
+- `loadOauthConfigFromEnv` accepts a missing `SAXO_APP_SECRET`.
+- `SaxoClient.hasRefreshCredentials()` works for both modes.
+- README + auth CLI help text document Saxo's PKCE portal quirk:
+  the registered redirect URL in the developer portal must **omit
+  the port** (`http://localhost/callback`, not
+  `http://localhost:8765/callback`). The URL sent at runtime can
+  still include the port — Saxo matches port-blind for PKCE only.
+  Code grant still requires exact-match including port.
+
+### Added — four new tools (30 → 34)
+
+- **`saxo_list_net_positions`** — `/port/v1/netpositions/me`.
+  Positions aggregated per instrument (one row per Uic with the
+  net amount), not per fill. Right view for "what's my current
+  exposure?". Uses the same ClientKey auto-resolve as
+  `getBalance`.
+- **`saxo_list_activities`** — `/port/v1/activities`. Recent
+  account events (placed/modified/cancelled orders, trades,
+  dividend payments, corporate actions). Pass `fromDateTime` /
+  `toDateTime` (ISO 8601) + `$top` / `$skip` + `activityTypes`
+  filter.
+- **`saxo_list_standard_option_expiries`** —
+  `/ref/v1/standarddates/optionexpiry`. The standardized
+  option-expiry calendar (3rd Friday monthlies, quarterlies,
+  weeklies). Distinct from `saxo_list_option_expiries`, which is
+  per-option-root.
+- **`saxo_find_option_leg`** — convenience helper. Given
+  `(symbol, expiry, strike, putCall)` plus optional `exchangeId`,
+  returns the option leg Uic. Compresses the 4-step
+  option-discovery workflow into one call. When multiple option
+  roots match (e.g. `NOK` has both OPRA-US and EUREX-EU listings),
+  prefers the multi-leg-capable root and surfaces alternatives in
+  `warnings[]`.
+
+### Verified live (no code change, just validation)
+
+- **Multi-leg write path on real Saxo SIM.** 0.1.1 had only
+  validated `precheck`. Full round trip now confirmed clean:
+  place a NOK Jan 2027 15/20 call spread (1 contract @ 0.05 GTC,
+  far below market so it never fills) → appears in `listOrders`
+  with `MultiLegOrderId=5038344141` and two per-leg orders →
+  modify `OrderPrice` to 0.07 → cancel → no working orders, cash
+  unchanged.
+- **PKCE OAuth flow against a real Saxo PKCE app.** Wire-shape
+  live-verified: no Authorization header, `client_id` in body,
+  for both `authorization_code` and `refresh_token` grants.
+- **22-check sweep across uncovered surface area.** Confirmed
+  `list_exchanges`, `get_instrument_details` (Stock + StockOption),
+  `search_instruments` with FxSpot + exchange filter,
+  `get_infoprices_list` (batched, mixed Tradable/Pending),
+  `chart` on StockOption returns a clean error,
+  `estimate_vertical_spread` for all 4 sides incl. credit spreads,
+  `compute_spread_quote` degrades gracefully when one condor leg
+  has no live quote.
+
+### Notes for LLM drivers
+
+- `listOrders` returns the per-leg orders for a multi-leg group
+  but doesn't surface `MultiLegOrderId` on the leg objects. Trust
+  the response from `place_multileg_order` for the
+  `MultiLegOrderId`; use `list_orders` for status, not group
+  reconstruction.
+- The `Price` field on per-leg orders in `list_orders` is
+  populated under a nested Saxo schema path, not at the top
+  level. Use `get_order(orderId)` for the full per-leg view.
 
 ### Tests
 
-- Three new unit tests verify the exact wire shape for both flows:
-  Code-grant exchange uses Basic auth + no client_id in body, PKCE
-  exchange uses no Authorization + client_id in body, PKCE refresh
-  uses the same shape. Plus a regression that
-  `hasRefreshCredentials()` accepts PKCE clients.
-- 86/86 (was 82).
-
-### Docs
-
-- README + auth CLI help text now document a Saxo PKCE-specific
-  quirk that's easy to miss and produces a confusing
-  `unauthorized_client` error: PKCE apps require the redirect URL
-  **registered in the portal** to OMIT the port (so
-  `http://localhost/callback`, not `http://localhost:8765/callback`).
-  The URL sent at runtime can still include the port — Saxo's PKCE
-  flow matches port-blind. Code-grant apps still require the
-  registered URL to match the runtime URL exactly.
-
-## [0.1.5] - 2026-05-19
-
-Surfaced by a broader live-SIM sweep exercising tools that hadn't been
-hit yet (portfolio reads, condor pricing, credit-spread precheck).
-
-### Fixed
-
-- All `/port/v1/*` endpoints (`getBalance`, `listPositions`,
-  `listClosedPositions`, `listOrders`, `getOrder`) now resolve the
-  session's `ClientKey` automatically when the caller passes only
-  `accountKey`. Saxo's API requires `ClientKey` alongside `AccountKey`
-  even though the relationship is implied — without the auto-resolve
-  the wrapper rejected with `"The ClientKey field is required."` The
-  resolution caches once per `SaxoClient` instance to avoid repeated
-  `/users/me` calls.
-- Tool descriptions for `saxo_precheck_multileg_order` and
-  `saxo_place_multileg_order` previously claimed `OrderPrice` could be
-  negative for credit spreads. Saxo's API actually rejects negative
-  values with `"Price cannot be negative."` (verified live). Updated
-  descriptions, the README spread-order body section, and the
-  `saxo_capabilities` entries to make clear `OrderPrice` is always
-  positive; debit vs credit is implicit in each leg's `BuySell`.
-- `saxo_compute_spread_quote` description still says the result `mid`
-  can be negative (correct — when a multi-leg net-credits, mid is
-  negative). The asymmetry (compute returns signed, place wants
-  unsigned) is now documented so LLM drivers know to abs() the value
-  before passing it to a place_* call.
-
-### Verified live (broad sweep, 22+ checks)
-
-- session, accounts, balance (with auto-ClientKey)
-- list_exchanges, get_instrument_details (Stock + StockOption)
-- search_instruments (FxSpot, exchange-filtered)
-- get_infoprices_list (batched, with mixed Tradable / Pending types)
-- chart on StockOption throws a clear "Asset Type not supported" error
-- list_positions / list_closed_positions / list_orders on both
-  `/me` and explicit-key paths
-- estimate_vertical_spread for all 4 sides (BullCall / BearCall /
-  BullPut / BearPut) including credit-spread math
-- compute_spread_quote degrades gracefully when one condor leg has
-  no live quote (returns `undefined` aggregates rather than fp noise)
-- precheck single-leg Stock buy + multi-leg credit spread (which
-  surfaces the "Price cannot be negative." docs bug above)
-- list_option_expiries
-
-### Tests
-
-- Two new tests for the portfolio ClientKey auto-resolve and its
-  caching behavior.
-- 82/82 (was 80).
-
-## [0.1.4] - 2026-05-19
-
-Follow-up to 0.1.3: the ExpiryDates filter fix shipped in 0.1.3
-turned out to be incorrect when verified against live Saxo SIM. My
-0.1.3 fix relied on the assumption that Saxo returns `OptionSpace`
-entries with EMPTY `SpecificOptions` for non-matching expiries —
-which the API actually doesn't do. Live SIM returns all 15 expiries
-with full strike data populated, regardless of the `ExpiryDates`
-query parameter.
-
-### Fixed
-
-- `saxo_get_option_chain` now filters the response client-side when
-  `expiryDates` is provided, since Saxo's `ExpiryDates` query
-  parameter is unreliable on SIM (and presumably on LIVE too —
-  haven't verified). The filter runs inside `getOptionChain` before
-  the response is returned, so all downstream consumers
-  (normalizeOptionChain, list_option_expiries when called with a
-  filter, etc.) see a correctly-filtered raw response.
-- 0.1.3's drop-empty-expiries logic in `normalizeOptionChain` is
-  kept as defense-in-depth; it's a no-op now but protects against
-  future Saxo behavior where an expiry might legitimately come back
-  without strike data.
-
-### Verified
-
-- Live SIM end-to-end run against the actual `getOptionChain` +
-  `computeSpreadQuote` code paths (`test/bugfix-verify.mjs` —
-  not part of the suite, kept locally as a one-shot probe).
-  Confirms:
-  - `expiryDates: ["2027-01-15"]` returns 1 expiry (was 15).
-  - `bidAskWidth` for NOK 15/20 spread = 0.15, matches the
-    `worstCaseDebit − bestCaseDebit` identity exactly.
-
-### Tests
-
-- New unit test for the client-side filter in `getOptionChain`:
-  verifies that when `expiryDates` is passed, the returned
-  `OptionSpace` is filtered to just those entries.
-- New unit test for the unfiltered case to ensure no regression.
-
-## [0.1.3] - 2026-05-19
-
-Two bug fixes caught by driving the live SIM tools end-to-end through
-Claude Desktop.
-
-### Fixed
-
-- `saxo_compute_spread_quote` `bidAskWidth` was computed via the same
-  signed aggregator as `midDebit` / `worstCaseDebit` / `bestCaseDebit`,
-  which flips the sign on sell legs. For widths that's mathematically
-  wrong — bid/ask width is non-directional. The result was that for
-  spreads with similar per-leg widths (which is most option spreads),
-  the buy and sell widths almost cancelled and the field returned
-  floating-point noise like `4.44e-16` instead of the actual sum.
-  Now `bidAskWidth = sum(|ask − bid|)` across legs, which is exactly
-  `worstCaseDebit − bestCaseDebit` (the spread the LLM driver should
-  budget for over best-case execution).
-- `saxo_get_option_chain` returned all 15 expiry slots even when
-  `expiryDates: ["2027-01-15"]` was passed. Saxo's API always returns
-  the full `OptionSpace` array but only populates `SpecificOptions`
-  for the expiries the caller asked about. `normalizeOptionChain` now
-  drops expiry entries with no `SpecificOptions`, so a filtered query
-  returns just the requested expiries and an unfiltered query still
-  returns the full set (since every entry is populated in that case).
-
-### Tests
-
-- Regression test for `bidAskWidth` using the exact NOK 15C/20C SIM
-  quotes from the user's test session (0.05 + 0.03 = 0.08, not
-  0.05 − 0.03 = 0.02).
-- Regression test for equal-width legs that originally produced fp
-  noise; now asserts the result is strictly above 1e-10.
-- Tightened the existing `computeSpreadQuote` test which had the bug
-  baked in as expected behavior (`bidAskWidth ≈ 0` for symmetric
-  widths). It now asserts `bidAskWidth ≈ worstCaseDebit − bestCaseDebit`.
-- New test for `normalizeOptionChain` dropping empty expiry slots
-  when Saxo returns filler entries.
-
-## [0.1.2] - 2026-05-19
-
-Hot-fix release. The MCPB bundle in 0.1.1 was unusable from Claude
-Desktop because Claude Desktop substitutes `${user_config.NAME}` in
-the spawned env block **only for user_config fields the user filled
-in**. Optional fields the user left blank were passed through to the
-child process as the literal template string. The server then tried
-to use those literal strings as paths, tokens, and booleans — first
-casualty was `saxo_diagnostics` blowing up because `loadPolicy()`
-tried to `readFileSync('${user_config.SAXO_POLICY_PATH}')`.
-
-### Fixed
-
-- All `process.env.SAXO_*` reads now go through a `readEnv` helper
-  ([src/saxo/env.ts](src/saxo/env.ts)) that treats any value starting
-  with `${user_config.` as unset. Affects `loadPolicy`,
-  `writeAuditEvent`, `SaxoClient` constructor (access token, refresh
-  token, app key/secret, expires-at, base URL, timeout), OAuth config
-  loading, and the `saxo_diagnostics` aggregator.
-- `readBoolEnv` and `readNumberEnv` variants handle the same edge
-  case for `SAXO_ENABLE_LIVE_TRADING` and `SAXO_TIMEOUT_MS`.
-
-### Tests
-
-- New test block in [test/new-features.test.ts](test/new-features.test.ts)
-  covers `readEnv` / `readBoolEnv` / `readNumberEnv` placeholder
-  handling plus a `loadPolicy` regression test that asserts
-  DEFAULT_POLICY is returned when `SAXO_POLICY_PATH` is the literal
-  unresolved string.
+90/90 (was 69 in 0.1.1). Regression coverage added for every fix
+above, plus four new tests for `findOptionLeg` (single-root
+match, multi-root with warning, missing-strike error, exchangeId
+filter).
 
 ## [0.1.1] - 2026-05-19
 
@@ -519,12 +393,7 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.7...HEAD
-[0.1.7]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.6...v0.1.7
-[0.1.6]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.5...v0.1.6
-[0.1.5]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.4...v0.1.5
-[0.1.4]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.3...v0.1.4
-[0.1.3]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.1.3
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Borgels/mcp-server-saxo/releases/tag/v0.1.0
