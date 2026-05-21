@@ -26,6 +26,7 @@ Thumbs.db
 oauth-*.log
 policy.live*.json
 live-*.json
+strategy-snapshot*.json
 saxo-audit*.jsonl
 
 # Dev dependencies — listed in package.json devDependencies. mcpb does
