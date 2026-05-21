@@ -399,7 +399,11 @@ with `stockUniverse`, `stockMarket`, `stockMaxCandidates`, and
 stock screener can still build a ranked universe from Saxo data. Option thesis
 output includes selected and rejected candidates, thesis budgets, max-loss
 exposure, expiry buckets, strategy mix, deployment rules, and simple scenario
-notes.
+notes. Selected option candidates also include `entryTiming`, which classifies
+current price action as `enter`, `scale_in`, `wait`, or `avoid` using the
+underlying price, breakeven, SMA20/SMA50 distance, 5d/20d returns, and recent
+average range. This lets the planner distinguish a buyable pullback from a
+technical breakdown before sizing tranches.
 For an options-only account, set `includeStocks=false`; the planner then keeps
 stock sleeves at zero and treats the options risk budget as the deployable
 account sleeve instead of a small satellite. Use `maxCashDollars` when the cash

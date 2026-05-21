@@ -334,6 +334,13 @@ describe('screenOptionStrategies', () => {
       thetaDailyPercentOfRisk: expect.any(Number),
     });
     expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.rationale).toContain('Net theta');
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.entryTiming).toMatchObject({
+      verdict: expect.stringMatching(/enter|scale_in|wait|avoid/),
+      starterTranchePercent: expect.any(Number),
+      addRule: expect.any(String),
+      invalidateRule: expect.any(String),
+      rationale: expect.arrayContaining([expect.any(String)]),
+    });
     expect(result.optionsRiskDashboard).toMatchObject({
       maxOptionsRiskDollars: 20_000,
       maxThesisRiskDollars: 10_000,

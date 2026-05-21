@@ -374,6 +374,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Set includeStocks=false for an options-only account; stock allocation targets then stay at zero.',
       'Set discoverOptionCandidates=true to blend explicit option theses with a deterministic Saxo market/option screener discovery sleeve.',
       'Set requireGreeks=true for options-only or aggressive accounts so candidates without complete Saxo Greeks are rejected instead of merely warned.',
+      'Selected option candidates include entryTiming so pullbacks can be staged separately from technical breakdowns.',
       'For options-only immediate plans, contract counts scale up to configured thesis, trade, and cash-reserve budgets; staged plans remain starter-sized.',
       'Risk dashboard reports cash reserve, deployable cash, unallocated option budget, and warnings when strict filters leave material cash undeployed.',
       'Use portfolioProfile=concentrated_conviction, maxSelectedUnderlyings, minPositionRiskDollars, and maxContractsPerPosition to avoid many tiny hard-to-monitor option positions.',

@@ -86,6 +86,23 @@ export interface OptionPortfolioSelectedCandidate {
   };
   expiry?: string;
   daysToExpiry?: number;
+  entryTiming: {
+    verdict: 'enter' | 'scale_in' | 'wait' | 'avoid';
+    underlyingPrice?: number;
+    breakeven?: number;
+    supportReference?: number;
+    resistanceReference?: number;
+    pullbackFromBreakevenPercent?: number;
+    distanceToSma20Percent?: number;
+    distanceToSma50Percent?: number;
+    return5dPercent?: number;
+    return20dPercent?: number;
+    averageRange14dPercent?: number;
+    starterTranchePercent: number;
+    addRule: string;
+    invalidateRule: string;
+    rationale: string[];
+  };
   rationale: string;
   deploymentRule: string;
   exitRule: string;
@@ -297,6 +314,7 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
           : undefined,
         expiry: plan.expiry,
         daysToExpiry: plan.daysToExpiry,
+        entryTiming: entryTiming(plan),
         rationale: explainSelection(plan, thesis),
         deploymentRule: deploymentRule(plan, thesis, input.deploymentStyle),
         exitRule: exitRule(plan),
@@ -542,8 +560,15 @@ function deploymentRule(plan: OptionPlan, thesis: ReturnType<typeof normalizeThe
   if (style === 'watchlist') {
     return 'Watchlist only; rerun the planner and refresh live quotes before allocating capital.';
   }
+  const timing = entryTiming(plan);
+  if (timing.verdict === 'avoid') {
+    return `${timing.invalidateRule} Do not open unless a fresh screen improves the entry timing verdict.`;
+  }
+  if (timing.verdict === 'wait') {
+    return `${timing.addRule} Use no more than a small starter until price confirms.`;
+  }
   if (thesis.conviction === 'high') {
-    return 'Use a starter tranche first; add only after the thesis remains intact and live spread/quote quality is still acceptable.';
+    return `${timing.verdict === 'scale_in' ? `Start with about ${timing.starterTranchePercent}% of intended size. ` : ''}${timing.addRule}`;
   }
   return 'Open only if live executable quote is at or better than the screened debit/credit and no catalyst risk has changed.';
 }
@@ -570,6 +595,122 @@ function buildDeploymentRules(style: BuildOptionPortfolioPlanInput['deploymentSt
     'Stage 2: add only after the thesis remains intact and price action confirms.',
     'Stage 3: keep unused budget for improved entries, rolls, or hedges.',
   ];
+}
+
+function entryTiming(plan: OptionPlan): OptionPortfolioSelectedCandidate['entryTiming'] {
+  const metrics = plan.screeningContext?.metrics;
+  const underlyingPrice = plan.underlyingPrice;
+  const breakeven = plan.breakevens[0];
+  const pullbackFromBreakevenPercent = underlyingPrice !== undefined && breakeven !== undefined
+    ? (underlyingPrice - breakeven) / breakeven * 100
+    : undefined;
+  const distanceToSma20Percent = metrics?.distanceToSma20Percent;
+  const distanceToSma50Percent = metrics?.distanceToSma50Percent;
+  const return5dPercent = metrics?.return5dPercent;
+  const return20dPercent = metrics?.return20dPercent;
+  const averageRange14dPercent = metrics?.averageRange14dPercent;
+  const supportReference = maxDefined(metrics?.sma20, metrics?.sma50);
+  const resistanceReference = breakeven;
+  const rationale: string[] = [];
+
+  let verdict: OptionPortfolioSelectedCandidate['entryTiming']['verdict'] = 'enter';
+  let starterTranchePercent = 100;
+
+  if (return5dPercent !== undefined && return5dPercent <= -8 && return20dPercent !== undefined && return20dPercent > 0) {
+    verdict = 'scale_in';
+    starterTranchePercent = 50;
+    rationale.push(`Recent ${round(return5dPercent)}% 5-day pullback inside a positive ${round(return20dPercent)}% 20-day trend; scale rather than chase full size.`);
+  } else if (return5dPercent !== undefined && return5dPercent <= -8) {
+    verdict = 'wait';
+    starterTranchePercent = 25;
+    rationale.push(`Recent ${round(return5dPercent)}% 5-day drop without confirmed 20-day uptrend; wait for stabilization.`);
+  }
+
+  if (distanceToSma50Percent !== undefined && distanceToSma50Percent >= 25) {
+    if (verdict === 'enter') {
+      verdict = 'scale_in';
+      starterTranchePercent = Math.min(starterTranchePercent, 50);
+    }
+    rationale.push(`Underlying remains extended at ${round(distanceToSma50Percent)}% above SMA50; avoid full-size entry in one tranche.`);
+  }
+
+  if (pullbackFromBreakevenPercent !== undefined && pullbackFromBreakevenPercent < 0) {
+    if (verdict === 'enter') {
+      verdict = 'scale_in';
+      starterTranchePercent = Math.min(starterTranchePercent, 50);
+    }
+    rationale.push(`Underlying is ${round(Math.abs(pullbackFromBreakevenPercent))}% below strategy breakeven; acceptable only as staged entry if thesis holds.`);
+  }
+
+  if (
+    metrics?.sma20 !== undefined &&
+    underlyingPrice !== undefined &&
+    underlyingPrice < metrics.sma20 * 0.97 &&
+    return5dPercent !== undefined &&
+    return5dPercent < 0
+  ) {
+    verdict = return20dPercent !== undefined && return20dPercent > 15 ? 'wait' : 'avoid';
+    starterTranchePercent = verdict === 'wait' ? 25 : 0;
+    rationale.push('Price is more than 3% below SMA20 while short-term momentum is negative; wait for reclaim or rerun screen.');
+  }
+
+  if ((averageRange14dPercent ?? 0) >= 5) {
+    if (verdict === 'enter') {
+      verdict = 'scale_in';
+      starterTranchePercent = Math.min(starterTranchePercent, 50);
+    }
+    rationale.push(`Average daily range is elevated at ${round(averageRange14dPercent)}%; use tranche sizing and limit orders.`);
+  }
+
+  if (!rationale.length) {
+    rationale.push('Entry timing is acceptable under the current trend, breakeven, and volatility checks.');
+  }
+
+  return {
+    verdict,
+    underlyingPrice: roundMoney(underlyingPrice),
+    breakeven: roundMoney(breakeven),
+    supportReference: roundMoney(supportReference),
+    resistanceReference: roundMoney(resistanceReference),
+    pullbackFromBreakevenPercent: round(pullbackFromBreakevenPercent),
+    distanceToSma20Percent: round(distanceToSma20Percent),
+    distanceToSma50Percent: round(distanceToSma50Percent),
+    return5dPercent: round(return5dPercent),
+    return20dPercent: round(return20dPercent),
+    averageRange14dPercent: round(averageRange14dPercent),
+    starterTranchePercent,
+    addRule: addRule(verdict, breakeven, metrics?.sma20),
+    invalidateRule: invalidateRule(metrics?.sma20, metrics?.sma50, breakeven),
+    rationale,
+  };
+}
+
+function addRule(
+  verdict: OptionPortfolioSelectedCandidate['entryTiming']['verdict'],
+  breakeven: number | undefined,
+  sma20: number | undefined,
+): string {
+  if (verdict === 'avoid') {
+    return 'Do not add while the entry timing verdict is avoid.';
+  }
+  if (verdict === 'wait') {
+    return `Wait for stabilization${breakeven !== undefined ? ` or reclaim above breakeven ${roundMoney(breakeven)}` : ''} before adding.`;
+  }
+  if (verdict === 'scale_in') {
+    return `Open a starter tranche only; add after price stabilizes${breakeven !== undefined ? ` above breakeven ${roundMoney(breakeven)}` : sma20 !== undefined ? ` above SMA20 ${roundMoney(sma20)}` : ''} and live spread quality remains acceptable.`;
+  }
+  return 'Full planned entry is allowed if live quote is at or better than screened debit/credit and spread quality remains acceptable.';
+}
+
+function invalidateRule(sma20: number | undefined, sma50: number | undefined, breakeven: number | undefined): string {
+  const references = [
+    sma20 !== undefined ? `SMA20 ${roundMoney(sma20)}` : undefined,
+    sma50 !== undefined ? `SMA50 ${roundMoney(sma50)}` : undefined,
+    breakeven !== undefined ? `breakeven ${roundMoney(breakeven)}` : undefined,
+  ].filter(Boolean);
+  return references.length
+    ? `Review or pause if price cannot hold/reclaim ${references.join(' / ')}.`
+    : 'Review or pause if price action continues lower without stabilization.';
 }
 
 function scenarioNotes(candidate: OptionPortfolioSelectedCandidate): string[] {
@@ -649,6 +790,11 @@ function dollars(netValue: number | undefined, percent: number | undefined): num
 function minDefined(...values: Array<number | undefined>): number | undefined {
   const defined = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
   return defined.length ? Math.min(...defined) : undefined;
+}
+
+function maxDefined(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
+  return defined.length ? Math.max(...defined) : undefined;
 }
 
 function round(value: number | undefined): number | undefined {
