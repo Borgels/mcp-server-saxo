@@ -43,9 +43,13 @@
         "SAXO_ACCESS_TOKEN": "${user_config.SAXO_ACCESS_TOKEN}",
         "SAXO_REFRESH_TOKEN": "${user_config.SAXO_REFRESH_TOKEN}",
         "SAXO_TOKEN_EXPIRES_AT": "${user_config.SAXO_TOKEN_EXPIRES_AT}",
+        "SAXO_REFRESH_TOKEN_EXPIRES_AT": "${user_config.SAXO_REFRESH_TOKEN_EXPIRES_AT}",
         "SAXO_APP_KEY": "${user_config.SAXO_APP_KEY}",
         "SAXO_APP_SECRET": "${user_config.SAXO_APP_SECRET}",
         "SAXO_REDIRECT_URI": "${user_config.SAXO_REDIRECT_URI}",
+        "SAXO_TOKEN_STORE_PATH": "${user_config.SAXO_TOKEN_STORE_PATH}",
+        "SAXO_PERSIST_TOKENS_ON_REFRESH": "${user_config.SAXO_PERSIST_TOKENS_ON_REFRESH}",
+        "SAXO_TOKEN_ENV_FILE_PATH": "${user_config.SAXO_TOKEN_ENV_FILE_PATH}",
         "SAXO_TIMEOUT_MS": "${user_config.SAXO_TIMEOUT_MS}",
         "ALPHA_VANTAGE_API_KEY": "${user_config.ALPHA_VANTAGE_API_KEY}",
         "SAXO_STRATEGY_SNAPSHOT_PATH": "${user_config.SAXO_STRATEGY_SNAPSHOT_PATH}",
@@ -84,6 +88,12 @@
       "description": "Optional. If set, lets the client refresh proactively. Otherwise computed from the JWT exp claim.",
       "required": false
     },
+    "SAXO_REFRESH_TOKEN_EXPIRES_AT": {
+      "type": "string",
+      "title": "Refresh-token expiry (ISO 8601)",
+      "description": "Optional. Stored by OAuth login/refresh when Saxo returns refresh_token_expires_in; used only for diagnostics and warnings.",
+      "required": false
+    },
     "SAXO_APP_KEY": {
       "type": "string",
       "title": "App key",
@@ -104,6 +114,25 @@
       "description": "Loopback URI registered in the Saxo app. Must use the hostname `localhost` (Saxo rejects IP-literal redirects). Only used by the saxo_oauth_* tools.",
       "required": false,
       "default": "http://localhost:8765/callback"
+    },
+    "SAXO_TOKEN_STORE_PATH": {
+      "type": "string",
+      "title": "Token-store JSON path",
+      "description": "Optional. JSON file path where OAuth tools and automatic refresh can persist rotated Saxo tokens. Useful for MCPB / desktop clients where editing .env files is awkward.",
+      "required": false
+    },
+    "SAXO_PERSIST_TOKENS_ON_REFRESH": {
+      "type": "boolean",
+      "title": "Persist tokens on refresh",
+      "description": "When true, automatic request-time refresh writes rotated tokens to SAXO_TOKEN_ENV_FILE_PATH (or .env). SAXO_TOKEN_STORE_PATH is written whenever configured.",
+      "required": false,
+      "default": false
+    },
+    "SAXO_TOKEN_ENV_FILE_PATH": {
+      "type": "string",
+      "title": "Token env file path",
+      "description": "Optional env file used when SAXO_PERSIST_TOKENS_ON_REFRESH=true or when OAuth tools are called with writeToEnvFile=true and no explicit envFilePath.",
+      "required": false
     },
     "SAXO_TIMEOUT_MS": {
       "type": "number",

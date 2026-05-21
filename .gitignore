@@ -19,3 +19,5 @@ policy.live*.json
 live-*.json
 strategy-snapshot*.json
 saxo-audit*.jsonl
+.saxo-tokens*.json
+saxo-tokens*.json

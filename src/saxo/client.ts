@@ -6,6 +6,7 @@ import {
   resolveEnvironment,
   type SaxoEnvironment,
 } from './environment.js';
+import { loadStoredTokens, tokenSetFromStore } from './token-persistence.js';
 
 export type QueryValue = string | number | boolean | null | undefined;
 export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
@@ -13,12 +14,15 @@ export type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
 export interface SaxoClientOptions {
   accessToken?: string;
   refreshToken?: string;
+  refreshTokenExpiresAt?: number;
   appKey?: string;
   appSecret?: string;
   environment?: SaxoEnvironment | string;
   baseUrl?: string;
   fetchImpl?: typeof fetch;
+  onTokensRefreshed?: (tokens: SaxoTokenSet, environment: SaxoEnvironment) => void | Promise<void>;
   timeoutMs?: number;
+  tokenStorePath?: string;
 }
 
 export class SaxoClient {
@@ -26,8 +30,10 @@ export class SaxoClient {
   private accessToken?: string;
   private accessTokenExpiresAt?: number;
   private refreshToken?: string;
+  private refreshTokenExpiresAt?: number;
   private readonly appKey?: string;
   private readonly appSecret?: string;
+  private readonly onTokensRefreshed?: (tokens: SaxoTokenSet, environment: SaxoEnvironment) => void | Promise<void>;
   readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
@@ -38,15 +44,25 @@ export class SaxoClient {
       options.environment !== undefined ? String(options.environment) : readEnv('SAXO_ENVIRONMENT'),
     );
     const endpoints = getEnvironmentEndpoints(this.environment);
+    const storedTokens = options.accessToken || options.refreshToken
+      ? undefined
+      : loadStoredTokens(options.tokenStorePath, this.environment);
+    const storedTokenSet = storedTokens ? tokenSetFromStore(storedTokens) : undefined;
 
-    this.accessToken = options.accessToken ?? readEnv('SAXO_ACCESS_TOKEN');
-    this.refreshToken = options.refreshToken ?? readEnv('SAXO_REFRESH_TOKEN');
+    this.accessToken = options.accessToken ?? storedTokenSet?.accessToken ?? readEnv('SAXO_ACCESS_TOKEN');
+    this.refreshToken = options.refreshToken ?? storedTokenSet?.refreshToken ?? readEnv('SAXO_REFRESH_TOKEN');
     this.appKey = options.appKey ?? readEnv('SAXO_APP_KEY');
     this.appSecret = options.appSecret ?? readEnv('SAXO_APP_SECRET');
-    this.accessTokenExpiresAt = parseExpiry(readEnv('SAXO_TOKEN_EXPIRES_AT'));
+    this.accessTokenExpiresAt = options.accessToken
+      ? parseExpiry(readEnv('SAXO_TOKEN_EXPIRES_AT'))
+      : storedTokenSet?.expiresAt ?? parseExpiry(readEnv('SAXO_TOKEN_EXPIRES_AT'));
     if (this.accessTokenExpiresAt === undefined && this.accessToken) {
       this.accessTokenExpiresAt = expiryFromJwt(this.accessToken);
     }
+    this.refreshTokenExpiresAt =
+      options.refreshTokenExpiresAt ??
+      storedTokenSet?.refreshTokenExpiresAt ??
+      parseExpiry(readEnv('SAXO_REFRESH_TOKEN_EXPIRES_AT'));
 
     this.baseUrl = trimTrailingSlash(
       options.baseUrl ?? readEnv('SAXO_BASE_URL') ?? endpoints.apiBase,
@@ -54,6 +70,7 @@ export class SaxoClient {
     assertSafeBaseUrl(this.baseUrl);
 
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.onTokensRefreshed = options.onTokensRefreshed;
     this.timeoutMs = options.timeoutMs ?? readNumberEnv('SAXO_TIMEOUT_MS', 30_000);
   }
 
@@ -78,6 +95,9 @@ export class SaxoClient {
     } else {
       this.accessTokenExpiresAt = expiryFromJwt(tokens.accessToken);
     }
+    if (tokens.refreshTokenExpiresAt) {
+      this.refreshTokenExpiresAt = tokens.refreshTokenExpiresAt;
+    }
   }
 
   getAccessToken(): string | undefined {
@@ -86,6 +106,17 @@ export class SaxoClient {
 
   getAccessTokenExpiresAt(): number | undefined {
     return this.accessTokenExpiresAt;
+  }
+
+  getRefreshTokenExpiresAt(): number | undefined {
+    return this.refreshTokenExpiresAt;
+  }
+
+  async refreshTokensNow(): Promise<SaxoTokenSet> {
+    const tokens = await this.refreshTokens();
+    this.setTokens(tokens);
+    await this.onTokensRefreshed?.(tokens, this.environment);
+    return tokens;
   }
 
   /**
@@ -159,7 +190,7 @@ export class SaxoClient {
     const response = await this.send(method, path, query, body);
 
     if (response.status === 401 && this.hasRefreshCredentials()) {
-      await this.refreshTokens();
+      await this.refreshTokensNow();
       const retried = await this.send(method, path, query, body);
       return this.handleResponse<T>(retried, this.buildUrl(path, query));
     }
@@ -209,22 +240,20 @@ export class SaxoClient {
     return responseBody as T;
   }
 
-  private async refreshTokens(): Promise<void> {
+  private async refreshTokens(): Promise<SaxoTokenSet> {
     if (!this.refreshToken || !this.appKey) {
       throw new Error('Cannot refresh Saxo token: missing refresh token or app key.');
     }
     // appSecret is optional — only required for "Code" grant (confidential
     // client). "PKCE" grant apps refresh without a secret.
 
-    const tokens = await refreshAccessToken({
+    return refreshAccessToken({
       refreshToken: this.refreshToken,
       appKey: this.appKey,
       appSecret: this.appSecret,
       environment: this.environment,
       fetchImpl: this.fetchImpl,
     });
-
-    this.setTokens(tokens);
   }
 
   private async maybeProactiveRefresh(): Promise<void> {
@@ -238,7 +267,7 @@ export class SaxoClient {
       return;
     }
     try {
-      await this.refreshTokens();
+      await this.refreshTokensNow();
     } catch (error) {
       // Surface the underlying request 401 if proactive refresh fails; do not
       // swallow this because the upcoming request would just fail anyway.

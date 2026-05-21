@@ -130,9 +130,14 @@ never accepted as tool arguments.
 | `SAXO_ENVIRONMENT` | always | `sim` (default) or `live` |
 | `SAXO_ACCESS_TOKEN` | always | Bearer token. 24-hour token for SIM, OAuth token for LIVE. |
 | `SAXO_REFRESH_TOKEN` | LIVE / long-running SIM | Together with app credentials enables 401-auto-refresh. |
+| `SAXO_TOKEN_EXPIRES_AT` | refresh | Optional ISO timestamp for proactive access-token refresh. |
+| `SAXO_REFRESH_TOKEN_EXPIRES_AT` | diagnostics | Optional ISO timestamp; stored when Saxo returns refresh-token lifetime. |
 | `SAXO_APP_KEY` | refresh / OAuth | Application key from the developer portal. |
 | `SAXO_APP_SECRET` | refresh / OAuth | Application secret. |
 | `SAXO_REDIRECT_URI` | OAuth | Defaults to `http://localhost:8765/callback`. Loopback only — and Saxo's authorize endpoint rejects IP-literal redirects, so use the `localhost` hostname rather than `127.0.0.1`. The URL in your app's Redirect URLs list must match exactly. |
+| `SAXO_TOKEN_STORE_PATH` | optional | JSON token store. If set, startup can load tokens from it and auto-refresh persists rotated tokens to it. |
+| `SAXO_PERSIST_TOKENS_ON_REFRESH` | optional | When `true`, automatic refresh also writes tokens to `SAXO_TOKEN_ENV_FILE_PATH` or `.env`. |
+| `SAXO_TOKEN_ENV_FILE_PATH` | optional | Env-file target for automatic token persistence. |
 | `SAXO_TIMEOUT_MS` | optional | Request timeout in ms (default 30000). |
 
 ### Two ways to log in for LIVE / long-running SIM
@@ -156,8 +161,13 @@ authorize endpoint with a PKCE challenge, and writes
 2. For the smooth local flow, call `saxo_oauth_login`. It starts the loopback
    listener, opens the browser by default, waits for approval, exchanges the
    code, and updates the running MCP server in memory.
-3. Tokens are not written to disk unless `writeToEnvFile=true` is supplied.
-   Use `envFilePath` when you want a specific file such as `.env.local`.
+3. Tokens are not written to disk unless `writeToEnvFile=true` or
+   `writeToTokenStore=true` is supplied. Use `envFilePath` for a specific env
+   file such as `.env.local`, or `tokenStorePath`/`SAXO_TOKEN_STORE_PATH` for a
+   JSON token store that works better in packaged MCP clients.
+4. To refresh without re-opening the browser, call `saxo_oauth_refresh`. It
+   uses the current refresh token, updates the running server, and can persist
+   the rotated tokens with the same env-file/token-store switches.
 
 For clients that want to control their own UI, use the lower-level two-step
 flow: call `saxo_oauth_start`, open the returned `authorizeUrl` (or set
@@ -166,6 +176,10 @@ flow: call `saxo_oauth_start`, open the returned `authorizeUrl` (or set
 
 The MCP server only listens on loopback (`127.0.0.1`) for the callback, so the
 flow never touches the public network beyond Saxo itself.
+
+Automatic request-time refresh also persists rotated tokens when
+`SAXO_TOKEN_STORE_PATH` is configured. Set `SAXO_PERSIST_TOKENS_ON_REFRESH=true`
+only if you also want refreshed tokens written back into an env file.
 
 ## Install
 
@@ -500,9 +514,10 @@ rules.
 | `saxo_update_price_alert` | `PUT /vas/v1/pricealerts/definitions/{id}` | Partial tool input is merged with the current definition before PUT. |
 | `saxo_delete_price_alerts` | `DELETE /vas/v1/pricealerts/definitions/{ids}` | Delete one or more price alerts. |
 | `saxo_update_price_alert_user_settings` | `PUT /vas/v1/pricealerts/usersettings` | Update email/popup/sound settings. |
-| `saxo_oauth_login` | OAuth2 PKCE | One-call local login; updates in-process tokens. Optional env-file persist. |
+| `saxo_oauth_login` | OAuth2 PKCE | One-call local login; updates in-process tokens. Optional env-file/token-store persist. |
 | `saxo_oauth_start` | OAuth2 PKCE | Loopback redirect only; reads app creds from env. |
-| `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional `.env` persist. |
+| `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional env-file/token-store persist. |
+| `saxo_oauth_refresh` | OAuth2 refresh | Refreshes in-process tokens without browser login. Optional env-file/token-store persist. |
 | `saxo_oauth_cancel` | — | Closes a pending OAuth listener. |
 
 ### Place / modify order body

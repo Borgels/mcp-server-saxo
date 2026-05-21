@@ -92,6 +92,7 @@ describe('Saxo tool registration', () => {
       'saxo_oauth_login',
       'saxo_oauth_start',
       'saxo_oauth_complete',
+      'saxo_oauth_refresh',
       'saxo_oauth_cancel',
     ]);
 
@@ -153,6 +154,7 @@ describe('Saxo tool registration', () => {
       'saxo_oauth_login',
       'saxo_oauth_start',
       'saxo_oauth_complete',
+      'saxo_oauth_refresh',
       'saxo_oauth_cancel',
     ];
     for (const id of writeIds) {
@@ -282,6 +284,42 @@ describe('Saxo tool registration', () => {
       status: 'ok',
     });
     expect(text).not.toContain('place order');
+  });
+
+  it('saxo_oauth_refresh refreshes and can persist to a token store', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'saxo-oauth-refresh-'));
+    const tokenStorePath = join(tempDir, 'tokens.json');
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(
+        JSON.stringify({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          expires_in: 1200,
+          refresh_token_expires_in: 86400,
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      appKey: 'app-key',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const registered = captureRegisteredTools(client);
+    const tool = registered.saxo_oauth_refresh;
+    if (!tool) throw new Error('saxo_oauth_refresh not registered');
+
+    const result = await tool.handler({ writeToTokenStore: true, tokenStorePath });
+    const payload = JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text) as {
+      status: string;
+      tokenStorage: string;
+      tokenStorePath: string;
+    };
+
+    expect(payload).toMatchObject({ status: 'ok', tokenStorage: 'token_store', tokenStorePath });
+    await expect(readFile(tokenStorePath, 'utf8')).resolves.toContain('new-refresh');
   });
 });
 

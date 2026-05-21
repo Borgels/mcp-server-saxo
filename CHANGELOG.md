@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Durable OAuth token persistence for MCP clients: optional token-store JSON
+  loading/writing via `SAXO_TOKEN_STORE_PATH`, automatic refresh persistence,
+  refresh-token expiry tracking, and a `saxo_oauth_refresh` tool.
+
 ## [0.2.2] - 2026-05-21
 
 ### Added

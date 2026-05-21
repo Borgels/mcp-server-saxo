@@ -61,6 +61,7 @@ const OAUTH_TOOLS = new Set([
   'saxo_oauth_login',
   'saxo_oauth_start',
   'saxo_oauth_complete',
+  'saxo_oauth_refresh',
   'saxo_oauth_cancel',
 ]);
 

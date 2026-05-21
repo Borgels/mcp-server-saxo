@@ -289,7 +289,12 @@ describe('OAuth supports both Code-grant (with secret) and PKCE-grant (no secret
       capturedHeaders = new Headers((init as RequestInit)?.headers as Record<string, string>);
       capturedBody = (init as RequestInit)?.body as string;
       return new Response(
-        JSON.stringify({ access_token: 'AT2', refresh_token: 'RT2', expires_in: 1200 }),
+        JSON.stringify({
+          access_token: 'AT2',
+          refresh_token: 'RT2',
+          expires_in: 1200,
+          refresh_token_expires_in: 86400,
+        }),
         { headers: { 'content-type': 'application/json' } },
       );
     });
@@ -303,6 +308,7 @@ describe('OAuth supports both Code-grant (with secret) and PKCE-grant (no secret
     expect(capturedBody).toMatch(/client_id=PKCE_KEY/);
     expect(capturedBody).toMatch(/grant_type=refresh_token/);
     expect(tokens.accessToken).toBe('AT2');
+    expect(tokens.refreshTokenExpiresAt).toBeGreaterThan(Date.now());
   });
 
   it('hasRefreshCredentials accepts PKCE clients (no secret)', () => {

@@ -75,8 +75,7 @@ import {
   type PlaceMultiLegOrderInput,
   type PlaceOrderInput,
 } from '../saxo/trading.js';
-import { resolve } from 'node:path';
-import { upsertEnvFile } from '../saxo/env-file.js';
+import { readEnv } from '../saxo/env.js';
 import {
   cancelOauthFlow,
   completeOauthFlow,
@@ -84,6 +83,7 @@ import {
   openBrowser,
   startOauthFlow,
 } from '../saxo/oauth.js';
+import { persistOauthTokens } from '../saxo/token-persistence.js';
 
 const orderDurationSchema = z.object({
   DurationType: z.enum([
@@ -1399,13 +1399,15 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Run Saxo OAuth Login',
       description:
-        'Run the full Saxo OAuth2 + PKCE login in one MCP call. Starts a loopback callback listener, optionally opens the browser, waits for approval, exchanges tokens, updates the running MCP server, and optionally persists tokens to an env file.',
+        'Run the full Saxo OAuth2 + PKCE login in one MCP call. Starts a loopback callback listener, optionally opens the browser, waits for approval, exchanges tokens, updates the running MCP server, and optionally persists tokens to an env file or token-store JSON.',
       inputSchema: {
         environment: z.enum(['sim', 'live']).optional(),
         timeoutSeconds: z.number().int().min(5).max(900).default(180),
         openBrowser: z.boolean().default(true),
         writeToEnvFile: z.boolean().default(false),
         envFilePath: z.string().trim().min(1).optional(),
+        writeToTokenStore: z.boolean().optional(),
+        tokenStorePath: z.string().trim().min(1).optional(),
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
@@ -1419,9 +1421,14 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
           const { tokens, environment } = await completeOauthFlow(flow.ticketId, input.timeoutSeconds * 1000);
           client.setTokens(tokens);
 
-          const envFilePath = input.writeToEnvFile
-            ? await persistOauthTokens(environment, tokens, input.envFilePath)
-            : undefined;
+          const storage = await persistOauthTokens({
+            environment,
+            tokens,
+            writeToEnvFile: input.writeToEnvFile,
+            envFilePath: input.envFilePath,
+            writeToTokenStore: shouldWriteTokenStore(input.writeToTokenStore, input.tokenStorePath),
+            tokenStorePath: input.tokenStorePath,
+          });
 
           return jsonToolResult({
             status: 'ok',
@@ -1429,9 +1436,13 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
             redirectUri: flow.redirectUri,
             browserOpened,
             expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt).toISOString() : undefined,
+            refreshTokenExpiresAt: tokens.refreshTokenExpiresAt
+              ? new Date(tokens.refreshTokenExpiresAt).toISOString()
+              : undefined,
             hasRefreshToken: Boolean(tokens.refreshToken),
-            tokenStorage: input.writeToEnvFile ? 'env_file' : 'memory',
-            envFilePath,
+            tokenStorage: storage.storage,
+            envFilePath: storage.envFilePath,
+            tokenStorePath: storage.tokenStorePath,
             warnings: environment !== client.environment
               ? [`Authenticated ${environment}, but the running Saxo client was constructed for ${client.environment}. Restart the MCP server with SAXO_ENVIRONMENT=${environment} before using the token.`]
               : [],
@@ -1477,12 +1488,14 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Complete Saxo OAuth Login',
       description:
-        'Wait for the Saxo callback, exchange the code for tokens, and update the running MCP server. Optionally writes tokens to a .env file.',
+        'Wait for the Saxo callback, exchange the code for tokens, and update the running MCP server. Optionally writes tokens to a .env file or token-store JSON.',
       inputSchema: {
         ticketId: z.string().trim().min(1),
         timeoutSeconds: z.number().int().min(5).max(900).default(180),
         writeToEnvFile: z.boolean().default(false),
         envFilePath: z.string().trim().min(1).optional(),
+        writeToTokenStore: z.boolean().optional(),
+        tokenStorePath: z.string().trim().min(1).optional(),
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
@@ -1492,17 +1505,67 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
 
         client.setTokens(tokens);
 
-        const envFilePath = input.writeToEnvFile
-          ? await persistOauthTokens(environment, tokens, input.envFilePath)
-          : undefined;
+        const storage = await persistOauthTokens({
+          environment,
+          tokens,
+          writeToEnvFile: input.writeToEnvFile,
+          envFilePath: input.envFilePath,
+          writeToTokenStore: shouldWriteTokenStore(input.writeToTokenStore, input.tokenStorePath),
+          tokenStorePath: input.tokenStorePath,
+        });
 
         return jsonToolResult({
           status: 'ok',
           environment,
           expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt).toISOString() : undefined,
+          refreshTokenExpiresAt: tokens.refreshTokenExpiresAt
+            ? new Date(tokens.refreshTokenExpiresAt).toISOString()
+            : undefined,
           hasRefreshToken: Boolean(tokens.refreshToken),
-          tokenStorage: input.writeToEnvFile ? 'env_file' : 'memory',
-          envFilePath,
+          tokenStorage: storage.storage,
+          envFilePath: storage.envFilePath,
+          tokenStorePath: storage.tokenStorePath,
+        });
+      }),
+  );
+
+  server.registerTool(
+    'saxo_oauth_refresh',
+    {
+      title: 'Refresh Saxo OAuth Tokens',
+      description:
+        'Refresh the running Saxo access token using the configured refresh token. Optionally persists the rotated tokens to a .env file or token-store JSON.',
+      inputSchema: {
+        writeToEnvFile: z.boolean().default(false),
+        envFilePath: z.string().trim().min(1).optional(),
+        writeToTokenStore: z.boolean().optional(),
+        tokenStorePath: z.string().trim().min(1).optional(),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_oauth_refresh', input, async () => {
+        const tokens = await client.refreshTokensNow();
+        const storage = await persistOauthTokens({
+          environment: client.environment,
+          tokens,
+          writeToEnvFile: input.writeToEnvFile,
+          envFilePath: input.envFilePath,
+          writeToTokenStore: shouldWriteTokenStore(input.writeToTokenStore, input.tokenStorePath),
+          tokenStorePath: input.tokenStorePath,
+        });
+
+        return jsonToolResult({
+          status: 'ok',
+          environment: client.environment,
+          expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt).toISOString() : undefined,
+          refreshTokenExpiresAt: tokens.refreshTokenExpiresAt
+            ? new Date(tokens.refreshTokenExpiresAt).toISOString()
+            : undefined,
+          hasRefreshToken: Boolean(tokens.refreshToken),
+          tokenStorage: storage.storage,
+          envFilePath: storage.envFilePath,
+          tokenStorePath: storage.tokenStorePath,
         });
       }),
   );
@@ -1524,24 +1587,8 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 }
 
-async function persistOauthTokens(
-  environment: string,
-  tokens: { accessToken: string; refreshToken?: string; expiresAt?: number },
-  envFilePathInput?: string,
-): Promise<string> {
-  const envFilePath = resolve(process.cwd(), envFilePathInput ?? '.env');
-  const entries: Record<string, string> = {
-    SAXO_ENVIRONMENT: environment,
-    SAXO_ACCESS_TOKEN: tokens.accessToken,
-  };
-  if (tokens.refreshToken) {
-    entries.SAXO_REFRESH_TOKEN = tokens.refreshToken;
-  }
-  if (tokens.expiresAt) {
-    entries.SAXO_TOKEN_EXPIRES_AT = new Date(tokens.expiresAt).toISOString();
-  }
-  await upsertEnvFile(envFilePath, entries);
-  return envFilePath;
+function shouldWriteTokenStore(inputValue: boolean | undefined, tokenStorePath: string | undefined): boolean {
+  return inputValue ?? Boolean(tokenStorePath ?? readEnv('SAXO_TOKEN_STORE_PATH'));
 }
 
 function applyOrderPolicy(order: OrderPolicyInput): void {

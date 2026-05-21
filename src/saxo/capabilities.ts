@@ -767,14 +767,14 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_oauth_login',
     title: 'Run Saxo OAuth Login',
     description:
-      'Run a full Saxo OAuth2 + PKCE login in one MCP call. Starts a loopback listener, optionally opens the browser, waits for approval, exchanges tokens, updates the running MCP server, and optionally persists tokens to an env file.',
+      'Run a full Saxo OAuth2 + PKCE login in one MCP call. Starts a loopback listener, optionally opens the browser, waits for approval, exchanges tokens, updates the running MCP server, and optionally persists tokens to an env file or token-store JSON.',
     risk: 'write',
     examples: [{ environment: 'live', openBrowser: true, timeoutSeconds: 180, writeToEnvFile: false }],
     identifierFormats: ['environment: sim|live'],
     safetyNotes: [
       'Does not place trades; classified as write because it changes authentication state.',
       'Uses SAXO_APP_KEY/SAXO_APP_SECRET from the MCP server runtime environment, which may come from an MCPB/client config rather than a local env file.',
-      'Tokens are stored in memory by default. Set writeToEnvFile=true only when file persistence is desired.',
+      'Tokens are stored in memory by default. Set writeToEnvFile=true or writeToTokenStore=true only when persistence is desired.',
       'Only listens on loopback (127.0.0.1/localhost).',
     ],
     keywords: ['oauth', 'login', 'token', 'pkce', 'authorize', 'browser'],
@@ -798,15 +798,30 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_oauth_complete',
     title: 'Complete Saxo OAuth Login',
     description:
-      'Finish a Saxo OAuth login started by saxo_oauth_start. Waits for the user to approve in the browser, exchanges the code for tokens, and updates the running MCP server. Optionally writes tokens to a .env file.',
+      'Finish a Saxo OAuth login started by saxo_oauth_start. Waits for the user to approve in the browser, exchanges the code for tokens, and updates the running MCP server. Optionally writes tokens to an env file or token-store JSON.',
     risk: 'write',
     examples: [{ ticketId: 'uuid', timeoutSeconds: 120 }],
     identifierFormats: ['ticketId from saxo_oauth_start'],
     safetyNotes: [
       'Tokens replace SAXO_ACCESS_TOKEN/SAXO_REFRESH_TOKEN in the running process.',
-      'Persisting to .env is opt-in.',
+      'Persisting to an env file or token-store JSON is opt-in.',
     ],
     keywords: ['oauth', 'complete', 'callback', 'tokens'],
+  },
+  {
+    id: 'saxo_oauth_refresh',
+    title: 'Refresh Saxo OAuth Tokens',
+    description:
+      'Refresh the running Saxo access token using SAXO_REFRESH_TOKEN + SAXO_APP_KEY. Updates the MCP server in memory and can persist rotated tokens to an env file or token-store JSON.',
+    risk: 'write',
+    examples: [{ writeToTokenStore: true }, { writeToEnvFile: true, envFilePath: '.env.local' }],
+    identifierFormats: ['refresh token from current Saxo client config'],
+    safetyNotes: [
+      'Does not place trades; classified as write because it changes authentication state.',
+      'Requires a refresh token and app key in the running client.',
+      'Use SAXO_TOKEN_STORE_PATH plus SAXO_PERSIST_TOKENS_ON_REFRESH for automatic persistence after request-time refreshes.',
+    ],
+    keywords: ['oauth', 'refresh', 'token', 'persist', 'expiry'],
   },
   {
     id: 'saxo_oauth_cancel',
