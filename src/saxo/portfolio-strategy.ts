@@ -29,6 +29,7 @@ export interface PlanPortfolioStrategyInput {
   deploymentStyle?: DeploymentStyle;
   targetInvestedPercent?: number;
   cashReservePercent?: number;
+  maxCashDollars?: number;
   maxSingleNamePercent?: number;
   maxSectorPercent?: number;
   maxOptionsRiskPercent?: number;
@@ -57,6 +58,7 @@ export interface PortfolioStrategyResult {
     deploymentStyle: DeploymentStyle;
     targetInvestedPercent: number;
     cashReservePercent: number;
+    maxCashDollars?: number;
     maxSingleNamePercent: number;
     maxSectorPercent: number;
     maxOptionsRiskPercent: number;
@@ -96,9 +98,12 @@ export interface PortfolioStrategyResult {
     maxSingleNameDollars?: number;
     maxOptionsRiskDollars?: number;
     perIdeaRiskBudgetDollars?: number;
+    cashReserveDollars?: number;
+    deployableCashDollars?: number;
     plannedStockNotional?: number;
     plannedOptionRisk?: number;
     unallocatedStockTarget?: number;
+    unallocatedOptionBudget?: number;
     sectorExposure: Record<string, number>;
     cashAfterPlan?: number;
     warnings: string[];
@@ -155,7 +160,8 @@ export async function planPortfolioStrategy(
   const riskProfile = input.riskProfile ?? 'balanced';
   const deploymentStyle = input.deploymentStyle ?? 'staged';
   const targetInvestedPercent = clampNumber(input.targetInvestedPercent ?? defaultTargetInvested(objective, riskProfile), 1, 100);
-  const cashReservePercent = clampNumber(input.cashReservePercent ?? defaultCashReserve(objective, riskProfile), 0, 95);
+  const configuredCashReservePercent = clampNumber(input.cashReservePercent ?? defaultCashReserve(objective, riskProfile), 0, 95);
+  const maxCashDollars = input.maxCashDollars === undefined ? undefined : clampNumber(input.maxCashDollars, 0, Number.MAX_SAFE_INTEGER);
   const maxSingleNamePercent = clampNumber(input.maxSingleNamePercent ?? 10, 0.1, 100);
   const maxSectorPercent = clampNumber(input.maxSectorPercent ?? 35, 1, 100);
   const maxOptionsRiskPercent = clampNumber(input.maxOptionsRiskPercent ?? 5, 0, 100);
@@ -228,6 +234,10 @@ export async function planPortfolioStrategy(
   const investedValue = netValue !== undefined && cashAvailable !== undefined ? Math.max(0, netValue - cashAvailable) : undefined;
   const cashPercent = netValue && cashAvailable !== undefined ? cashAvailable / netValue * 100 : undefined;
   const investedPercent = netValue && investedValue !== undefined ? investedValue / netValue * 100 : undefined;
+  const cashReserveDollars = resolveCashReserveDollars(netValue, configuredCashReservePercent, maxCashDollars);
+  const cashReservePercent = netValue && cashReserveDollars !== undefined
+    ? cashReserveDollars / netValue * 100
+    : configuredCashReservePercent;
   const targetAllocation = buildTargetAllocation({
     cashReservePercent,
     includeOptions,
@@ -250,6 +260,7 @@ export async function planPortfolioStrategy(
   });
   const { optionsPortfolioPlan, optionsRiskDashboard } = buildOptionPortfolioPlan({
     accountContext,
+    cashReserveDollars,
     deploymentStyle,
     maxOptionIdeas,
     maxOptionsRiskPercent,
@@ -266,18 +277,26 @@ export async function planPortfolioStrategy(
   const plannedStockNotional = sum(stockAllocationPlan.map(item => item.notional ?? 0));
   const plannedOptionRisk = sum(optionAllocationPlan.map(item => item.plannedRisk ?? 0));
   const unallocatedStockTarget = Math.max(0, stockTargetDollars - plannedStockNotional);
+  const optionBudgetTarget = optionsPortfolioPlan?.totalBudget;
+  const unallocatedOptionBudget = optionBudgetTarget === undefined ? undefined : Math.max(0, optionBudgetTarget - plannedOptionRisk);
   const cashAfterPlan = cashAvailable !== undefined ? cashAvailable - plannedStockNotional - plannedOptionRisk : undefined;
+  const deployableCashDollars = cashAvailable !== undefined && cashReserveDollars !== undefined
+    ? Math.max(0, cashAvailable - cashReserveDollars)
+    : undefined;
   const riskDashboardWarnings = riskDashboardNotes({
     cashAfterPlan,
-    cashReserveDollars: netValue ? netValue * cashReservePercent / 100 : undefined,
+    cashReserveDollars,
+    deployableCashDollars,
     includeOptions,
     includeStocks,
+    optionBudgetTarget,
     optionScreen,
     plannedOptionRisk,
     plannedStockNotional,
     sectorExposure: summarizeSectorExposure(stockAllocationPlan),
     stockScreen,
     stockTargetDollars,
+    unallocatedOptionBudget,
     unallocatedStockTarget,
   });
 
@@ -289,6 +308,7 @@ export async function planPortfolioStrategy(
       deploymentStyle,
       targetInvestedPercent,
       cashReservePercent,
+      maxCashDollars,
       maxSingleNamePercent,
       maxSectorPercent,
       maxOptionsRiskPercent,
@@ -315,6 +335,7 @@ export async function planPortfolioStrategy(
     deploymentPlan: buildDeploymentPlan({
       cashAvailable,
       cashReservePercent,
+      cashReserveDollars,
       deploymentStyle,
       netValue,
       objective,
@@ -324,9 +345,12 @@ export async function planPortfolioStrategy(
       maxSingleNameDollars: roundMoney(netValue ? netValue * maxSingleNamePercent / 100 : undefined),
       maxOptionsRiskDollars: roundMoney(netValue ? netValue * maxOptionsRiskPercent / 100 : undefined),
       perIdeaRiskBudgetDollars: roundMoney(netValue ? netValue * riskBudgetPercentPerIdea / 100 : undefined),
+      cashReserveDollars: roundMoney(cashReserveDollars),
+      deployableCashDollars: roundMoney(deployableCashDollars),
       plannedStockNotional: roundMoney(plannedStockNotional),
       plannedOptionRisk: roundMoney(plannedOptionRisk),
       unallocatedStockTarget: roundMoney(unallocatedStockTarget),
+      unallocatedOptionBudget: roundMoney(unallocatedOptionBudget),
       sectorExposure: summarizeSectorExposure(stockAllocationPlan),
       cashAfterPlan: roundMoney(cashAfterPlan),
       warnings: riskDashboardWarnings,
@@ -390,6 +414,7 @@ function buildTargetAllocation(input: {
 
 function buildDeploymentPlan(input: {
   cashAvailable?: number;
+  cashReserveDollars?: number;
   cashReservePercent: number;
   deploymentStyle: DeploymentStyle;
   netValue?: number;
@@ -397,7 +422,7 @@ function buildDeploymentPlan(input: {
   targetInvestedPercent: number;
 }): PortfolioStrategyResult['deploymentPlan'] {
   const deployable = input.cashAvailable !== undefined && input.netValue !== undefined
-    ? Math.max(0, Math.min(input.cashAvailable - input.netValue * input.cashReservePercent / 100, input.netValue * input.targetInvestedPercent / 100))
+    ? Math.max(0, Math.min(input.cashAvailable - (input.cashReserveDollars ?? input.netValue * input.cashReservePercent / 100), input.netValue * input.targetInvestedPercent / 100))
     : undefined;
   if (input.deploymentStyle === 'immediate') {
     return [{
@@ -710,14 +735,17 @@ function resolveOptionSymbols(symbols: string[] | undefined, theses: OptionThesi
 function riskDashboardNotes(input: {
   cashAfterPlan?: number;
   cashReserveDollars?: number;
+  deployableCashDollars?: number;
   includeOptions: boolean;
   includeStocks: boolean;
+  optionBudgetTarget?: number;
   optionScreen?: ScreenOptionStrategiesResult;
   plannedOptionRisk: number;
   plannedStockNotional: number;
   sectorExposure: Record<string, number>;
   stockScreen?: ScreenStockStrategiesResult;
   stockTargetDollars: number;
+  unallocatedOptionBudget?: number;
   unallocatedStockTarget: number;
 }): string[] {
   const warnings: string[] = [];
@@ -732,6 +760,20 @@ function riskDashboardNotes(input: {
   }
   if (input.includeOptions && !input.optionScreen?.Data.length) {
     warnings.push('No option candidates passed the configured screen.');
+  }
+  if (
+    input.includeOptions &&
+    !input.includeStocks &&
+    input.cashAfterPlan !== undefined &&
+    input.cashReserveDollars !== undefined &&
+    input.cashAfterPlan > input.cashReserveDollars &&
+    input.deployableCashDollars !== undefined &&
+    input.deployableCashDollars > 0 &&
+    input.plannedOptionRisk < input.deployableCashDollars * 0.75
+  ) {
+    warnings.push(
+      'Options-only plan leaves material cash above the configured reserve; add more qualifying theses/candidates or relax risk, Greek, liquidity, or per-idea caps before deploying the remainder.',
+    );
   }
   if (input.includeStocks && input.stockTargetDollars > 0 && input.unallocatedStockTarget > input.stockTargetDollars * 0.25) {
     warnings.push('Stock target is materially under-allocated; broaden the universe, add ETFs, or relax single-name caps before deploying the remainder.');
@@ -764,6 +806,18 @@ function defaultCashReserve(objective: PortfolioObjective, riskProfile: RiskProf
   if (riskProfile === 'conservative') return 20;
   if (riskProfile === 'aggressive') return 5;
   return 10;
+}
+
+function resolveCashReserveDollars(
+  netValue: number | undefined,
+  cashReservePercent: number,
+  maxCashDollars: number | undefined,
+): number | undefined {
+  const percentReserve = netValue !== undefined ? netValue * cashReservePercent / 100 : undefined;
+  if (maxCashDollars === undefined) {
+    return percentReserve;
+  }
+  return minDefined(percentReserve, maxCashDollars) ?? maxCashDollars;
 }
 
 function dollars(netValue: number | undefined, percent: number): number | undefined {

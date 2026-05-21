@@ -406,6 +406,48 @@ describe('screenOptionStrategies', () => {
     });
   });
 
+  it('scales options-only immediate plans to the configured risk budgets', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        deploymentStyle: 'immediate',
+        maxCashDollars: 1_000,
+        maxOptionsRiskPercent: 20,
+        maxThesisRiskPercent: 20,
+        maxSingleTradeRiskPercent: 20,
+        riskBudgetPercentPerIdea: 20,
+        optionTheses: [
+          {
+            name: 'AAA immediate options only',
+            symbols: ['AAA'],
+            role: 'core_conviction',
+            horizon: 'swing',
+            preferredStructures: ['debit_spread'],
+            targetRiskPercent: 20,
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    const selected = result.optionsPortfolioPlan?.selectedCandidates[0];
+    expect(result.targetAllocation.find(item => item.sleeve === 'cash_reserve')?.targetDollars).toBe(1_000);
+    expect(selected?.recommendedContracts).toBeGreaterThan(1);
+    expect(selected?.sizing).toMatchObject({
+      mode: 'budget_scaled',
+      riskPerContract: expect.any(Number),
+      maxContractsByBudget: selected?.recommendedContracts,
+    });
+    expect(result.riskDashboard.cashAfterPlan).toBeLessThan(50_000);
+    expect(result.riskDashboard.unallocatedOptionBudget).toBeGreaterThanOrEqual(0);
+    expect(result.riskDashboard.warnings.join(' ')).toContain('Options-only plan leaves material cash');
+  });
+
   it('keeps option-root failures visible as rejected portfolio candidates', async () => {
     const client = testClient(strategyScreenerFetchMock());
 

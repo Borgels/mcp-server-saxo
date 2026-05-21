@@ -380,6 +380,7 @@ const portfolioStrategySchema = z.object({
   deploymentStyle: deploymentStyleSchema.default('staged'),
   targetInvestedPercent: z.number().positive().max(100).optional(),
   cashReservePercent: z.number().min(0).max(95).optional(),
+  maxCashDollars: z.number().min(0).optional(),
   maxSingleNamePercent: z.number().positive().max(100).default(10),
   maxSectorPercent: z.number().positive().max(100).default(35),
   maxOptionsRiskPercent: z.number().min(0).max(100).default(5),

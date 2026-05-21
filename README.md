@@ -349,6 +349,7 @@ conviction risk:
   "deploymentStyle": "staged",
   "targetInvestedPercent": 80,
   "cashReservePercent": 10,
+  "maxCashDollars": 1000,
   "maxSingleNamePercent": 10,
   "maxSectorPercent": 35,
   "maxOptionsRiskPercent": 5,
@@ -380,7 +381,14 @@ and rejected candidates, thesis budgets, max-loss exposure, expiry buckets,
 strategy mix, deployment rules, and simple scenario notes.
 For an options-only account, set `includeStocks=false`; the planner then keeps
 stock sleeves at zero and treats the options risk budget as the deployable
-account sleeve instead of a small satellite.
+account sleeve instead of a small satellite. Use `maxCashDollars` when the cash
+reserve is a hard dollar cap rather than only a percentage. With
+`deploymentStyle="immediate"`, options-only contract counts scale up to the
+configured thesis, trade, and cash-reserve budgets; staged plans remain
+starter-sized. The risk dashboard reports `deployableCashDollars`,
+`cashReserveDollars`, `unallocatedOptionBudget`, and warns when a strict
+options-only plan leaves material cash undeployed because no additional
+Greek-backed candidates fit the current rules.
 
 ## Tools
 

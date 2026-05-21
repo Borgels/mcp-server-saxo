@@ -36,6 +36,7 @@ export interface StockAllocationCandidate {
 
 export interface BuildOptionPortfolioPlanInput {
   accountContext?: AccountScreeningContext;
+  cashReserveDollars?: number;
   deploymentStyle: 'staged' | 'immediate' | 'watchlist';
   maxOptionIdeas: number;
   maxOptionsRiskPercent: number;
@@ -60,6 +61,13 @@ export interface OptionPortfolioSelectedCandidate {
   recommendedContracts: number;
   plannedRisk?: number;
   maxProfit?: number;
+  sizing: {
+    mode: 'watchlist' | 'starter' | 'budget_scaled';
+    riskPerContract?: number;
+    tradeCap?: number;
+    maxContractsByBudget?: number;
+    budgetUtilizationPercent?: number;
+  };
   breakevens: number[];
   greeks?: {
     delta?: number;
@@ -126,7 +134,11 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
   optionsRiskDashboard: OptionsRiskDashboard;
 } {
   const netValue = input.netValue ?? input.accountContext?.netValue;
-  const totalBudget = dollars(netValue, input.maxOptionsRiskPercent);
+  const maxOptionsRiskDollars = dollars(netValue, input.maxOptionsRiskPercent);
+  const deployableCash = input.accountContext?.cashAvailable !== undefined && input.cashReserveDollars !== undefined
+    ? Math.max(0, input.accountContext.cashAvailable - input.cashReserveDollars)
+    : undefined;
+  const totalBudget = minDefined(maxOptionsRiskDollars, deployableCash) ?? maxOptionsRiskDollars ?? deployableCash;
   const maxThesisRiskDollars = dollars(
     netValue,
     input.maxThesisRiskPercent ?? (input.optionsMode === 'guardrailed'
@@ -165,6 +177,7 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
       continue;
     }
 
+    const selectedSymbols = new Set<string>();
     for (const plan of thesisPlans) {
       if (selected.length >= input.maxOptionIdeas) {
         rejected.push({
@@ -174,6 +187,9 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
           reason: 'Rejected because maxOptionIdeas was reached.',
           warnings: [],
         });
+        continue;
+      }
+      if (selectedSymbols.has(plan.symbol)) {
         continue;
       }
       const riskPerContract = plan.positionSizing?.riskPerContract ?? plan.maxLoss;
@@ -205,10 +221,17 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
         continue;
       }
 
-      const recommendedContracts = input.deploymentStyle === 'watchlist' ? 0 : Math.max(1, Math.min(1, maxContracts));
+      const sizing = contractSizing({
+        deploymentStyle: input.deploymentStyle,
+        maxContracts,
+        riskPerContract,
+        tradeCap,
+      });
+      const recommendedContracts = sizing.recommendedContracts;
       const plannedRisk = recommendedContracts * riskPerContract;
       totalRiskUsed += plannedRisk;
       thesisRiskUsed[thesis.name] = (thesisRiskUsed[thesis.name] ?? 0) + plannedRisk;
+      selectedSymbols.add(plan.symbol);
       const brief = input.optionScreen?.decisionBriefs.find(item => item.rank === plan.rank && item.symbol === plan.symbol);
       selected.push({
         rank: selected.length + 1,
@@ -220,25 +243,35 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
         confidence: brief?.confidence ?? 'low',
         recommendedContracts,
         plannedRisk: roundMoney(plannedRisk),
-        maxProfit: roundMoney(plan.maxProfit),
+        maxProfit: roundMoney(plan.maxProfit === undefined ? undefined : plan.maxProfit * recommendedContracts),
+        sizing: {
+          mode: sizing.mode,
+          riskPerContract: roundMoney(riskPerContract),
+          tradeCap: roundMoney(tradeCap),
+          maxContractsByBudget: maxContracts,
+          budgetUtilizationPercent: percent(plannedRisk, tradeCap),
+        },
         breakevens: plan.breakevens,
         greeks: plan.greeks
-          ? {
-            delta: plan.greeks.delta,
-            gamma: plan.greeks.gamma,
-            theta: plan.greeks.theta,
-            vega: plan.greeks.vega,
-            thetaDailyPercentOfRisk: plan.greeks.thetaDailyPercentOfRisk,
-          }
+          ? scaleGreeks(plan.greeks, recommendedContracts)
           : undefined,
         expiry: plan.expiry,
         daysToExpiry: plan.daysToExpiry,
         rationale: explainSelection(plan, thesis),
         deploymentRule: deploymentRule(plan, thesis, input.deploymentStyle),
         exitRule: exitRule(plan),
-        warnings: Array.from(new Set([...(plan.keyRisks ?? []), ...plan.warnings])),
+        warnings: Array.from(new Set([
+          ...(plan.keyRisks ?? []),
+          ...plan.warnings,
+          ...contractCountWarnings(recommendedContracts),
+        ])),
       });
-      break;
+      if (totalBudget !== undefined && totalRiskUsed >= totalBudget) {
+        break;
+      }
+      if (thesisBudget !== undefined && (thesisRiskUsed[thesis.name] ?? 0) >= thesisBudget) {
+        break;
+      }
     }
 
     for (const structure of thesis.preferredStructures ?? []) {
@@ -370,6 +403,48 @@ function resolveThesisBudget(
   return minDefined(requested, cap) ?? cap;
 }
 
+function contractSizing(input: {
+  deploymentStyle: BuildOptionPortfolioPlanInput['deploymentStyle'];
+  maxContracts: number;
+  riskPerContract: number;
+  tradeCap: number;
+}): {
+  recommendedContracts: number;
+  mode: OptionPortfolioSelectedCandidate['sizing']['mode'];
+} {
+  if (input.deploymentStyle === 'watchlist') {
+    return { recommendedContracts: 0, mode: 'watchlist' };
+  }
+  if (input.deploymentStyle === 'staged') {
+    return { recommendedContracts: Math.max(1, Math.min(1, input.maxContracts)), mode: 'starter' };
+  }
+  return { recommendedContracts: Math.max(1, input.maxContracts), mode: 'budget_scaled' };
+}
+
+function contractCountWarnings(contracts: number): string[] {
+  if (contracts > 25) {
+    return [`Large contract count (${contracts}); verify displayed size, liquidity, and partial-fill risk before execution.`];
+  }
+  return [];
+}
+
+function scaleGreeks(
+  greeks: NonNullable<OptionPlan['greeks']>,
+  contracts: number,
+): NonNullable<OptionPortfolioSelectedCandidate['greeks']> {
+  return {
+    delta: scaleGreek(greeks.delta, contracts),
+    gamma: scaleGreek(greeks.gamma, contracts),
+    theta: scaleGreek(greeks.theta, contracts),
+    vega: scaleGreek(greeks.vega, contracts),
+    thetaDailyPercentOfRisk: greeks.thetaDailyPercentOfRisk,
+  };
+}
+
+function scaleGreek(value: number | undefined, contracts: number): number | undefined {
+  return value === undefined ? undefined : round(value * contracts);
+}
+
 function explainSelection(plan: OptionPlan, thesis: ReturnType<typeof normalizeTheses>[number]): string {
   const score = plan.rankingBreakdown?.finalScore ?? plan.score.total;
   const theta = plan.greeks?.theta !== undefined
@@ -497,6 +572,13 @@ function round(value: number | undefined): number | undefined {
 
 function roundMoney(value: number | undefined): number | undefined {
   return round(value);
+}
+
+function percent(value: number | undefined, base: number | undefined): number | undefined {
+  if (value === undefined || base === undefined || base <= 0) {
+    return undefined;
+  }
+  return round(value / base * 100);
 }
 
 function formatMoney(value: number | undefined): string {
