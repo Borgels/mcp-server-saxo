@@ -341,6 +341,8 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         deploymentStyle: 'staged',
         includeStocks: true,
         includeOptions: true,
+        stockUniverse: 'large_cap',
+        stockMaxCandidates: 120,
         targetInvestedPercent: 80,
         cashReservePercent: 10,
         maxCashDollars: 1000,
@@ -367,6 +369,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     safetyNotes: [
       'Read-only planning. Does not call precheck or place orders.',
       'Uses staged deployment by default; it may leave cash undeployed when candidates do not fit the risk rules.',
+      'Stock candidate discovery is controlled with stockUniverse, stockMarket, stockMaxCandidates, and stockMaxTechnicalCandidates.',
       'Uses guardrailed options sizing by default; explicit optionTheses and optionsMode=user_driven are required for high-conviction concentration.',
       'Set includeStocks=false for an options-only account; stock allocation targets then stay at zero.',
       'Set discoverOptionCandidates=true to blend explicit option theses with a deterministic Saxo market/option screener discovery sleeve.',
@@ -382,9 +385,28 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_review_strategy_positions',
     title: 'Review Strategy Positions',
     description:
-      'Read-only post-execution strategy monitor for option positions. Matches expected strategy legs to open Saxo positions, refreshes quotes and Greeks, evaluates P/L, theta, DTE, profit-taking, loss, roll, and close rules, and returns deterministic follow-up verdicts.',
+      'Read-only post-execution strategy monitor for stock and option positions. Matches expected strategy legs to open Saxo positions, refreshes quotes, adds Greeks/DTE for options, evaluates P/L and follow-up rules, and returns deterministic verdicts.',
     risk: 'read',
     examples: [
+      {
+        accountKey: 'AccountKey...',
+        defaultRules: {
+          profitTakePercentOfCost: 25,
+          lossExitPercentOfCost: 10,
+        },
+        strategyPositions: [
+          {
+            name: 'AMD core stock',
+            thesisName: 'AI accelerator share gain',
+            symbol: 'AMD',
+            strategy: 'stock_core',
+            entryPrice: 145,
+            legs: [
+              { uic: 2556, assetType: 'Stock', buySell: 'Buy', amount: 25 },
+            ],
+          },
+        ],
+      },
       {
         accountKey: 'AccountKey...',
         defaultRules: {
@@ -414,10 +436,11 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     identifierFormats: ['AccountKey + strategyPositions[].legs[].uic'],
     safetyNotes: [
       'Read-only review. Does not call precheck, place, modify, or cancel orders.',
-      'Requires the executed strategy legs or saved plan metadata to evaluate a multi-leg position as one strategy.',
+      'Requires the executed strategy legs or saved plan metadata to evaluate a position as part of a named strategy.',
+      'Stock reviews use entry cost/price rules; option reviews additionally use Greeks, theta, expiry, roll, and max-profit/max-risk rules when supplied.',
       'Returns decision support verdicts such as hold, review, consider_trim, consider_close, and roll_watch.',
     ],
-    keywords: ['position follow-up', 'strategy monitor', 'roll', 'trim', 'close', 'theta', 'greeks', 'options'],
+    keywords: ['position follow-up', 'strategy monitor', 'stocks', 'options', 'roll', 'trim', 'close', 'theta', 'greeks'],
   },
   {
     id: 'saxo_list_accounts',

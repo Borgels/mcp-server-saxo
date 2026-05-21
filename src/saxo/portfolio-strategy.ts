@@ -13,6 +13,7 @@ import {
   screenStockStrategies,
   type ScreenStockStrategiesResult,
   type StockStrategyObjective,
+  type StockUniverse,
 } from './stock-strategy-screener.js';
 import {
   buildOptionPortfolioPlan,
@@ -52,6 +53,10 @@ export interface PlanPortfolioStrategyInput {
   minPositionRiskPercent?: number;
   includeStocks?: boolean;
   includeOptions?: boolean;
+  stockMarket?: 'us' | 'us_nasdaq' | 'us_nyse';
+  stockUniverse?: StockUniverse;
+  stockMaxCandidates?: number;
+  stockMaxTechnicalCandidates?: number;
   discoverOptionCandidates?: boolean;
   optionDiscoveryUniverse?: UnderlyingUniverse;
   optionDiscoveryPreset?: MarketScreenPreset;
@@ -95,6 +100,10 @@ export interface PortfolioStrategyResult {
     minPositionRiskPercent?: number;
     includeStocks: boolean;
     includeOptions: boolean;
+    stockMarket?: 'us' | 'us_nasdaq' | 'us_nyse';
+    stockUniverse?: StockUniverse;
+    stockMaxCandidates?: number;
+    stockMaxTechnicalCandidates?: number;
     discoverOptionCandidates: boolean;
     optionDiscoveryUniverse?: UnderlyingUniverse;
     optionDiscoveryPreset?: MarketScreenPreset;
@@ -226,10 +235,14 @@ export async function planPortfolioStrategy(
   const stockScreen = includeStocks
     ? await screenStockStrategies(client, {
       accountKey: input.accountKey,
+      market: input.stockMarket ?? 'us',
       symbols: input.stockSymbols,
+      universe: input.stockUniverse ?? (input.stockSymbols?.length ? 'symbols' : 'auto'),
       objective: stockObjectiveForPortfolio(objective),
       riskProfile,
       maxResults: Math.min(25, Math.max(maxStockIdeas * 3, maxStockIdeas)),
+      maxCandidates: input.stockMaxCandidates,
+      maxTechnicalCandidates: input.stockMaxTechnicalCandidates,
       includeAccountContext: true,
       riskBudgetPercentPerIdea,
       maxSingleNamePercent,
@@ -362,6 +375,10 @@ export async function planPortfolioStrategy(
       minPositionRiskPercent,
       includeStocks,
       includeOptions,
+      stockMarket: input.stockMarket,
+      stockUniverse: input.stockUniverse,
+      stockMaxCandidates: input.stockMaxCandidates,
+      stockMaxTechnicalCandidates: input.stockMaxTechnicalCandidates,
       discoverOptionCandidates,
       optionDiscoveryUniverse: input.optionDiscoveryUniverse,
       optionDiscoveryPreset: input.optionDiscoveryPreset,

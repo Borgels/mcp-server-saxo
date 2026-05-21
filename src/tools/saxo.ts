@@ -401,6 +401,10 @@ const portfolioStrategySchema = z.object({
   minPositionRiskPercent: z.number().positive().max(100).optional(),
   includeStocks: z.boolean().default(true),
   includeOptions: z.boolean().default(true),
+  stockMarket: z.enum(['us', 'us_nasdaq', 'us_nyse']).optional(),
+  stockUniverse: stockUniverseSchema.optional(),
+  stockMaxCandidates: z.number().int().min(1).max(500).optional(),
+  stockMaxTechnicalCandidates: z.number().int().min(0).max(100).optional(),
   discoverOptionCandidates: z.boolean().default(false),
   optionDiscoveryUniverse: underlyingUniverseSchema.optional(),
   optionDiscoveryPreset: z.enum(['top_gainers', 'top_losers', 'premarket_gainers', 'premarket_losers']).optional(),
@@ -429,7 +433,9 @@ const portfolioStrategySchema = z.object({
 });
 
 const strategyFollowUpRulesSchema = z.object({
+  profitTakePercentOfCost: z.number().min(0).max(1000).optional(),
   profitTakePercentOfMaxProfit: z.number().min(0).max(1000).optional(),
+  lossExitPercentOfCost: z.number().min(0).max(1000).optional(),
   lossExitPercentOfMaxRisk: z.number().min(0).max(1000).optional(),
   rollWhenDaysToExpiryBelow: z.number().int().min(0).max(3650).optional(),
   closeWhenDaysToExpiryBelow: z.number().int().min(0).max(3650).optional(),
@@ -448,6 +454,10 @@ const strategyPositionReviewSchema = z.object({
     symbol: z.string().trim().min(1).max(40).optional(),
     strategy: z.string().trim().min(1).max(80).optional(),
     openedAt: z.string().trim().min(1).optional(),
+    entryPrice: z.number().positive().optional(),
+    entryCost: z.number().positive().optional(),
+    entryProceeds: z.number().positive().optional(),
+    entryNotional: z.number().positive().optional(),
     entryNetDebit: z.number().optional(),
     entryNetCredit: z.number().optional(),
     entryMaxRisk: z.number().positive().optional(),
@@ -455,7 +465,7 @@ const strategyPositionReviewSchema = z.object({
     entryUnderlyingPrice: z.number().positive().optional(),
     legs: z.array(z.object({
       uic: z.number().int().positive(),
-      assetType: z.string().trim().min(1).default('StockOption'),
+      assetType: z.string().trim().min(1).optional(),
       buySell: z.enum(['Buy', 'Sell']),
       amount: z.number().positive(),
       expiry: z.string().trim().optional(),
@@ -879,7 +889,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Review Strategy Positions',
       description:
-        'Read-only follow-up review for executed option strategies. Matches expected legs to open positions, refreshes quotes/Greeks, evaluates profit/loss, theta, DTE, roll/trim/close rules, and returns deterministic decision support. Does not precheck or place orders.',
+        'Read-only follow-up review for executed stock and option strategies. Matches expected legs to open positions, refreshes quotes, adds Greeks/DTE for options, evaluates P/L, trim/close/roll rules, and returns deterministic decision support. Does not precheck or place orders.',
       inputSchema: strategyPositionReviewSchema.shape,
       annotations: READ_TOOL_ANNOTATIONS,
     },

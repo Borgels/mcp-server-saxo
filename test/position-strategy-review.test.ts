@@ -3,6 +3,57 @@ import { SaxoClient } from '../src/saxo/client.js';
 import { reviewStrategyPositions } from '../src/saxo/position-strategy-review.js';
 
 describe('reviewStrategyPositions', () => {
+  it('reviews stock positions without option-only Greeks or DTE assumptions', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(
+      client,
+      {
+        accountKey: 'account-1',
+        defaultRules: {
+          profitTakePercentOfCost: 15,
+          lossExitPercentOfCost: 10,
+        },
+        strategyPositions: [
+          {
+            name: 'AAA core stock',
+            thesisName: 'AAA operating momentum',
+            symbol: 'AAA',
+            strategy: 'stock_core',
+            entryPrice: 100,
+            legs: [
+              { uic: 201, assetType: 'Stock', buySell: 'Buy', amount: 10 },
+            ],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.reviews[0]).toMatchObject({
+      name: 'AAA core stock',
+      instrumentType: 'stock',
+      verdict: 'consider_trim',
+      entryValue: 1000,
+      currentValue: 1200,
+      unrealizedPnL: 200,
+      unrealizedPnLPercentOfMaxRisk: 20,
+      netGreeks: undefined,
+      daysToEarliestExpiry: undefined,
+      warnings: [],
+    });
+    expect(result.reviews[0]?.legs[0]).toMatchObject({
+      assetType: 'Stock',
+      closeMid: 120,
+      closeValue: 1200,
+    });
+    expect(result.reviews[0]?.triggeredRules.join(' ')).toContain('entry cost');
+  });
+
   it('matches executed legs and triggers deterministic follow-up rules', async () => {
     const client = new SaxoClient({
       environment: 'sim',
@@ -41,7 +92,7 @@ describe('reviewStrategyPositions', () => {
     );
 
     expect(result.accountPositions).toMatchObject({
-      positionsFetched: 2,
+      positionsFetched: 3,
       matchedLegs: 2,
       unmatchedLegs: 0,
     });
@@ -74,10 +125,22 @@ function followUpFetchMock(): typeof fetch {
         Data: [
           { PositionBase: { Uic: 101, Amount: 1, BuySell: 'Buy' } },
           { PositionBase: { Uic: 102, Amount: 1, BuySell: 'Sell' } },
+          { PositionBase: { Uic: 201, Amount: 10, BuySell: 'Buy' } },
         ],
       });
     }
     if (parsed.pathname.endsWith('/trade/v1/infoprices/list')) {
+      if (parsed.searchParams.get('AssetType') === 'Stock') {
+        return jsonResponse({
+          Data: [
+            {
+              Uic: 201,
+              AssetType: 'Stock',
+              Quote: { Bid: 119.5, Ask: 120.5, Mid: 120 },
+            },
+          ],
+        });
+      }
       return jsonResponse({
         Data: [
           {

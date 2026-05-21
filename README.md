@@ -337,9 +337,10 @@ Use `saxo_plan_portfolio_strategy` for whole-account deployment. It reads the
 account snapshot, runs the stock and option screeners, then returns target
 allocation, staged deployment, stock allocation, option satellite candidates,
 sector exposure, and portfolio-level risk warnings. For generic options
-portfolio planning, pass `optionTheses` to describe each sleeve; the planner
-uses guardrailed sizing by default and requires explicit input for concentrated
-conviction risk:
+portfolio planning, pass `optionTheses` to describe each options sleeve; stock
+ideas remain first-class through `stockSymbols`, `includeStocks`, stock
+allocation caps, and the stock strategy screener. The planner uses guardrailed
+sizing by default and requires explicit input for concentrated conviction risk:
 
 ```json
 {
@@ -361,6 +362,8 @@ conviction risk:
   "fragmentationPolicy": "reject",
   "requireGreeks": true,
   "maxThetaDailyPercentOfRisk": 1,
+  "stockUniverse": "large_cap",
+  "stockMaxCandidates": 120,
   "discoverOptionCandidates": true,
   "optionDiscoveryUniverse": "auto",
   "optionDiscoveryPlaybook": "long_term_directional",
@@ -384,9 +387,13 @@ Portfolio planning is read-only. It never calls precheck or places orders.
 Stock allocation de-duplicates issuer/share-class duplicates such as
 `GOOG`/`GOOGL`. `maxSectorPercent` is enforced when sector data is available
 from fundamentals context; otherwise the response includes a warning instead
-of pretending sector caps were applied. Option thesis output includes selected
-and rejected candidates, thesis budgets, max-loss exposure, expiry buckets,
-strategy mix, deployment rules, and simple scenario notes.
+of pretending sector caps were applied. Stock candidate discovery is controlled
+with `stockUniverse`, `stockMarket`, `stockMaxCandidates`, and
+`stockMaxTechnicalCandidates`; if explicit `stockSymbols` are not supplied, the
+stock screener can still build a ranked universe from Saxo data. Option thesis
+output includes selected and rejected candidates, thesis budgets, max-loss
+exposure, expiry buckets, strategy mix, deployment rules, and simple scenario
+notes.
 For an options-only account, set `includeStocks=false`; the planner then keeps
 stock sleeves at zero and treats the options risk budget as the deployable
 account sleeve instead of a small satellite. Use `maxCashDollars` when the cash
@@ -406,14 +413,14 @@ Use `portfolioProfile="concentrated_conviction"` plus
 and `fragmentationPolicy="reject"` when the account should favor fewer,
 larger, easier-to-monitor option positions instead of many small trades.
 
-Use `saxo_review_strategy_positions` after execution to monitor open option
-strategies against the plan you opened. Pass the executed legs and entry
-metrics from the selected plan or fill. The tool matches those legs to open
-Saxo positions, refreshes quotes and Greeks, estimates current strategy value
-and P/L, and evaluates deterministic profit-taking, loss, theta, DTE, roll,
-and close rules. It returns verdicts such as `hold`, `review`,
-`consider_trim`, `consider_close`, and `roll_watch`; execution remains a
-separate explicit order workflow.
+Use `saxo_review_strategy_positions` after execution to monitor open stock and
+option strategies against the plan you opened. Pass the executed stock leg or
+option legs plus entry metrics from the selected plan or fill. The tool matches
+those legs to open Saxo positions, refreshes quotes, estimates current value
+and P/L, and evaluates deterministic profit-taking/loss rules. Option
+strategies additionally include Greeks, theta, DTE, roll, and close rules. It
+returns verdicts such as `hold`, `review`, `consider_trim`, `consider_close`,
+and `roll_watch`; execution remains a separate explicit order workflow.
 
 ## Tools
 
@@ -448,7 +455,7 @@ rules.
 | `saxo_screen_option_strategies` | Market screener + chart TA + OptionsChain IV + planner | Cross-symbol options strategy screening. |
 | `saxo_screen_stock_strategies` | Saxo instruments + prices + chart TA + optional fundamentals/news | Opinionated stock strategy screening with decision briefs. |
 | `saxo_plan_portfolio_strategy` | Account snapshot + stock/options screeners | Whole-account target allocation, staged deployment, and risk dashboard. |
-| `saxo_review_strategy_positions` | Positions + quotes + Greeks | Post-execution strategy follow-up with hold/trim/close/roll verdicts. |
+| `saxo_review_strategy_positions` | Positions + quotes (+ Greeks for options) | Post-execution strategy follow-up with hold/trim/close/roll verdicts. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
 | `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions (one row per fill). |

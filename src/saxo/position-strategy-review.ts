@@ -1,8 +1,10 @@
 import type { SaxoClient } from './client.js';
+import { contractMultiplier } from './policy.js';
 import { getInfoPricesList } from './prices.js';
 import { listPositions } from './portfolio.js';
 
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
+export type StrategyInstrumentType = 'stock' | 'option' | 'mixed';
 
 export interface StrategyLegSnapshotInput {
   uic: number;
@@ -23,6 +25,10 @@ export interface StrategyFollowUpInput {
     symbol?: string;
     strategy?: string;
     openedAt?: string;
+    entryPrice?: number;
+    entryCost?: number;
+    entryProceeds?: number;
+    entryNotional?: number;
     entryNetDebit?: number;
     entryNetCredit?: number;
     entryMaxRisk?: number;
@@ -30,7 +36,9 @@ export interface StrategyFollowUpInput {
     entryUnderlyingPrice?: number;
     legs: StrategyLegSnapshotInput[];
     rules?: {
+      profitTakePercentOfCost?: number;
       profitTakePercentOfMaxProfit?: number;
+      lossExitPercentOfCost?: number;
       lossExitPercentOfMaxRisk?: number;
       rollWhenDaysToExpiryBelow?: number;
       closeWhenDaysToExpiryBelow?: number;
@@ -40,10 +48,14 @@ export interface StrategyFollowUpInput {
     };
   }>;
   defaultRules?: {
+    profitTakePercentOfCost?: number;
     profitTakePercentOfMaxProfit?: number;
+    lossExitPercentOfCost?: number;
     lossExitPercentOfMaxRisk?: number;
     rollWhenDaysToExpiryBelow?: number;
     closeWhenDaysToExpiryBelow?: number;
+    thesisInvalidBelow?: number;
+    thesisInvalidAbove?: number;
     maxThetaDailyPercentOfRisk?: number;
   };
 }
@@ -64,10 +76,12 @@ export interface StrategyFollowUpResult {
     thesisName?: string;
     symbol?: string;
     strategy?: string;
+    instrumentType: StrategyInstrumentType;
     verdict: FollowUpVerdict;
     daysToEarliestExpiry?: number;
     openLegsMatched: number;
     expectedLegs: number;
+    entryValue?: number;
     entryMaxRisk?: number;
     entryMaxProfit?: number;
     currentValue?: number;
@@ -85,6 +99,7 @@ export interface StrategyFollowUpResult {
     warnings: string[];
     legs: Array<{
       uic: number;
+      assetType: string;
       expectedAmount: number;
       openAmount?: number;
       closeMid?: number;
@@ -99,6 +114,7 @@ export interface StrategyFollowUpResult {
 
 interface InfoPrice {
   Uic?: number;
+  AssetType?: string;
   Greeks?: Record<string, number>;
   Quote?: {
     Ask?: number;
@@ -122,19 +138,7 @@ export async function reviewStrategyPositions(
   });
   const positionRows = feedRows(positions);
   const openAmountByUic = summarizeOpenAmounts(positionRows);
-  const uics = unique(strategies.flatMap(strategy => strategy.legs.map(leg => leg.uic)));
-  const prices = uics.length
-    ? await getInfoPricesList(client, {
-      accountKey: input.accountKey,
-      assetType: 'StockOption',
-      fieldGroups: ['Quote', 'Greeks', 'InstrumentPriceDetails'],
-      uics,
-    }) as { Data?: InfoPrice[]; _warning?: string }
-    : { Data: [] };
-  if (prices._warning) {
-    warnings.push(prices._warning);
-  }
-  const priceByUic = new Map((prices.Data ?? []).filter(row => typeof row.Uic === 'number').map(row => [row.Uic as number, row]));
+  const priceByUic = await fetchPricesByAssetType(client, strategies, input.accountKey, warnings);
 
   const reviews = strategies.map((strategy, index) =>
     reviewOneStrategy(strategy, {
@@ -176,16 +180,13 @@ function reviewOneStrategy(
   },
 ): StrategyFollowUpResult['reviews'][number] {
   const rules = { ...context.defaultRules, ...strategy.rules };
-  const entryMaxRisk = strategy.entryMaxRisk ?? strategy.entryNetDebit;
+  const entryValue = buildEntryValue(strategy);
+  const entryMaxRisk = strategy.entryMaxRisk ?? (entryValue !== undefined && entryValue > 0 ? entryValue : undefined);
   const entryMaxProfit = strategy.entryMaxProfit;
   const legs = strategy.legs.map(leg => reviewLeg(leg, context));
   const openLegsMatched = legs.filter(leg => leg.matched).length;
+  const instrumentType = inferStrategyInstrumentType(strategy.legs);
   const currentValue = aggregateCurrentValue(legs);
-  const entryValue = strategy.entryNetDebit !== undefined
-    ? strategy.entryNetDebit * 100
-    : strategy.entryNetCredit !== undefined
-      ? -strategy.entryNetCredit * 100
-      : undefined;
   const unrealizedPnL = currentValue !== undefined && entryValue !== undefined
     ? currentValue - entryValue
     : undefined;
@@ -194,16 +195,19 @@ function reviewOneStrategy(
   const triggeredRules = triggeredFollowUpRules({
     currentValue,
     daysToEarliestExpiry,
+    entryValue,
     entryMaxProfit,
     entryMaxRisk,
+    instrumentType,
     netGreeks,
     rules,
+    strategy,
     unrealizedPnL,
   });
   const warnings = [
     openLegsMatched < strategy.legs.length ? 'One or more expected legs were not found in open positions.' : undefined,
     currentValue === undefined ? 'Current close value could not be estimated for all legs.' : undefined,
-    netGreeks === undefined ? 'Greeks were unavailable for one or more reviewed legs.' : undefined,
+    instrumentType !== 'stock' && netGreeks === undefined ? 'Greeks were unavailable for one or more reviewed option legs.' : undefined,
   ].filter((item): item is string => Boolean(item));
 
   return {
@@ -211,10 +215,12 @@ function reviewOneStrategy(
     thesisName: strategy.thesisName,
     symbol: strategy.symbol,
     strategy: strategy.strategy,
+    instrumentType,
     verdict: verdictFromRules(triggeredRules, warnings, daysToEarliestExpiry),
     daysToEarliestExpiry,
     openLegsMatched,
     expectedLegs: strategy.legs.length,
+    entryValue: roundMoney(entryValue),
     entryMaxRisk,
     entryMaxProfit,
     currentValue: roundMoney(currentValue),
@@ -232,15 +238,18 @@ function reviewLeg(
   leg: StrategyLegSnapshotInput,
   context: { openAmountByUic: Map<number, number>; priceByUic: Map<number, InfoPrice> },
 ): StrategyFollowUpResult['reviews'][number]['legs'][number] {
+  const assetType = inferLegAssetType(leg);
   const price = context.priceByUic.get(leg.uic);
   const quote = price?.Quote;
   const closeMid = quote?.Mid ?? mid(quote?.Bid, quote?.Ask);
   const openAmount = context.openAmountByUic.get(leg.uic);
   const expectedSigned = leg.buySell === 'Buy' ? Math.abs(leg.amount) : -Math.abs(leg.amount);
   const matched = openAmount !== undefined && Math.sign(openAmount) === Math.sign(expectedSigned) && Math.abs(openAmount) >= Math.abs(expectedSigned);
-  const closeValue = closeMid === undefined ? undefined : closeMid * Math.abs(leg.amount) * 100 * (leg.buySell === 'Buy' ? 1 : -1);
+  const multiplier = contractMultiplier(assetType);
+  const closeValue = closeMid === undefined ? undefined : closeMid * Math.abs(leg.amount) * multiplier * (leg.buySell === 'Buy' ? 1 : -1);
   return {
     uic: leg.uic,
+    assetType,
     expectedAmount: expectedSigned,
     openAmount,
     closeMid: roundMoney(closeMid),
@@ -250,7 +259,7 @@ function reviewLeg(
     warnings: [
       !matched ? 'Expected leg was not matched to an open position with the same direction.' : undefined,
       closeMid === undefined ? 'Bid/ask midpoint was unavailable.' : undefined,
-      !price?.Greeks ? 'Greeks unavailable for leg.' : undefined,
+      isOptionAssetType(assetType) && !price?.Greeks ? 'Greeks unavailable for option leg.' : undefined,
     ].filter((item): item is string => Boolean(item)),
   };
 }
@@ -258,13 +267,25 @@ function reviewLeg(
 function triggeredFollowUpRules(input: {
   currentValue?: number;
   daysToEarliestExpiry?: number;
+  entryValue?: number;
   entryMaxProfit?: number;
   entryMaxRisk?: number;
+  instrumentType: StrategyInstrumentType;
   netGreeks?: NonNullable<StrategyFollowUpResult['reviews'][number]['netGreeks']>;
   rules: NonNullable<StrategyFollowUpInput['defaultRules']>;
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
   unrealizedPnL?: number;
 }): string[] {
   const triggered: string[] = [];
+  if (
+    input.rules.profitTakePercentOfCost !== undefined &&
+    input.unrealizedPnL !== undefined &&
+    input.entryValue !== undefined &&
+    Math.abs(input.entryValue) > 0 &&
+    input.unrealizedPnL >= Math.abs(input.entryValue) * input.rules.profitTakePercentOfCost / 100
+  ) {
+    triggered.push(`Profit target reached: P/L is at least ${input.rules.profitTakePercentOfCost}% of entry cost.`);
+  }
   if (
     input.rules.profitTakePercentOfMaxProfit !== undefined &&
     input.unrealizedPnL !== undefined &&
@@ -272,6 +293,15 @@ function triggeredFollowUpRules(input: {
     input.unrealizedPnL >= input.entryMaxProfit * input.rules.profitTakePercentOfMaxProfit / 100
   ) {
     triggered.push(`Profit target reached: P/L is at least ${input.rules.profitTakePercentOfMaxProfit}% of max profit.`);
+  }
+  if (
+    input.rules.lossExitPercentOfCost !== undefined &&
+    input.unrealizedPnL !== undefined &&
+    input.entryValue !== undefined &&
+    Math.abs(input.entryValue) > 0 &&
+    input.unrealizedPnL <= -Math.abs(input.entryValue) * input.rules.lossExitPercentOfCost / 100
+  ) {
+    triggered.push(`Loss rule reached: P/L is below -${input.rules.lossExitPercentOfCost}% of entry cost.`);
   }
   if (
     input.rules.lossExitPercentOfMaxRisk !== undefined &&
@@ -282,7 +312,24 @@ function triggeredFollowUpRules(input: {
     triggered.push(`Loss rule reached: P/L is below -${input.rules.lossExitPercentOfMaxRisk}% of max risk.`);
   }
   if (
+    input.rules.thesisInvalidBelow !== undefined &&
+    input.currentValue !== undefined &&
+    currentUnitPrice(input.strategy, input.currentValue) !== undefined &&
+    (currentUnitPrice(input.strategy, input.currentValue) as number) <= input.rules.thesisInvalidBelow
+  ) {
+    triggered.push(`Thesis invalidation reached: current price is at or below ${input.rules.thesisInvalidBelow}.`);
+  }
+  if (
+    input.rules.thesisInvalidAbove !== undefined &&
+    input.currentValue !== undefined &&
+    currentUnitPrice(input.strategy, input.currentValue) !== undefined &&
+    (currentUnitPrice(input.strategy, input.currentValue) as number) >= input.rules.thesisInvalidAbove
+  ) {
+    triggered.push(`Thesis invalidation reached: current price is at or above ${input.rules.thesisInvalidAbove}.`);
+  }
+  if (
     input.rules.rollWhenDaysToExpiryBelow !== undefined &&
+    input.instrumentType !== 'stock' &&
     input.daysToEarliestExpiry !== undefined &&
     input.daysToEarliestExpiry <= input.rules.rollWhenDaysToExpiryBelow
   ) {
@@ -290,6 +337,7 @@ function triggeredFollowUpRules(input: {
   }
   if (
     input.rules.closeWhenDaysToExpiryBelow !== undefined &&
+    input.instrumentType !== 'stock' &&
     input.daysToEarliestExpiry !== undefined &&
     input.daysToEarliestExpiry <= input.rules.closeWhenDaysToExpiryBelow
   ) {
@@ -297,6 +345,7 @@ function triggeredFollowUpRules(input: {
   }
   if (
     input.rules.maxThetaDailyPercentOfRisk !== undefined &&
+    input.instrumentType !== 'stock' &&
     input.netGreeks?.theta !== undefined &&
     input.netGreeks.theta < 0 &&
     (input.netGreeks.thetaDailyPercentOfRisk ?? 0) > input.rules.maxThetaDailyPercentOfRisk
@@ -355,14 +404,107 @@ function aggregateGreek(
   let found = false;
   let total = 0;
   for (const leg of legs) {
+    if (!isOptionAssetType(inferLegAssetType(leg))) {
+      continue;
+    }
     const value = readGreek(priceByUic.get(leg.uic)?.Greeks, name);
     if (value === undefined) {
       continue;
     }
     found = true;
-    total += (leg.buySell === 'Buy' ? 1 : -1) * value * Math.abs(leg.amount) * 100;
+    total += (leg.buySell === 'Buy' ? 1 : -1) * value * Math.abs(leg.amount) * contractMultiplier(inferLegAssetType(leg));
   }
   return found ? total : undefined;
+}
+
+async function fetchPricesByAssetType(
+  client: SaxoClient,
+  strategies: NonNullable<StrategyFollowUpInput['strategyPositions']>,
+  accountKey: string | undefined,
+  warnings: string[],
+): Promise<Map<number, InfoPrice>> {
+  const byAssetType = new Map<string, number[]>();
+  for (const leg of strategies.flatMap(strategy => strategy.legs)) {
+    const assetType = inferLegAssetType(leg);
+    byAssetType.set(assetType, unique([...(byAssetType.get(assetType) ?? []), leg.uic]));
+  }
+
+  const priceByUic = new Map<number, InfoPrice>();
+  for (const [assetType, uics] of byAssetType.entries()) {
+    const prices = await getInfoPricesList(client, {
+      accountKey,
+      assetType,
+      fieldGroups: priceFieldGroups(assetType),
+      uics,
+    }) as { Data?: InfoPrice[]; _warning?: string };
+    if (prices._warning) {
+      warnings.push(`${assetType}: ${prices._warning}`);
+    }
+    for (const row of prices.Data ?? []) {
+      if (typeof row.Uic === 'number') {
+        priceByUic.set(row.Uic, { ...row, AssetType: row.AssetType ?? assetType });
+      }
+    }
+  }
+  return priceByUic;
+}
+
+function buildEntryValue(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): number | undefined {
+  if (strategy.entryCost !== undefined) return strategy.entryCost;
+  if (strategy.entryProceeds !== undefined) return -strategy.entryProceeds;
+  if (strategy.entryNotional !== undefined) return strategy.entryNotional;
+  if (strategy.entryPrice !== undefined && strategy.legs.length === 1) {
+    const leg = strategy.legs[0] as StrategyLegSnapshotInput;
+    return strategy.entryPrice * Math.abs(leg.amount) * contractMultiplier(inferLegAssetType(leg)) * (leg.buySell === 'Buy' ? 1 : -1);
+  }
+  if (strategy.entryNetDebit !== undefined) {
+    return strategy.entryNetDebit * strategyMultiplier(strategy);
+  }
+  if (strategy.entryNetCredit !== undefined) {
+    return -strategy.entryNetCredit * strategyMultiplier(strategy);
+  }
+  return undefined;
+}
+
+function strategyMultiplier(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): number {
+  if (!strategy.legs.length) return 1;
+  const multipliers = unique(strategy.legs.map(leg => contractMultiplier(inferLegAssetType(leg))));
+  return multipliers.length === 1 ? multipliers[0] as number : 1;
+}
+
+function currentUnitPrice(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  currentValue: number,
+): number | undefined {
+  if (strategy.legs.length !== 1) return undefined;
+  const leg = strategy.legs[0] as StrategyLegSnapshotInput;
+  const denominator = Math.abs(leg.amount) * contractMultiplier(inferLegAssetType(leg));
+  return denominator > 0 ? Math.abs(currentValue) / denominator : undefined;
+}
+
+function inferStrategyInstrumentType(legs: StrategyLegSnapshotInput[]): StrategyInstrumentType {
+  const hasOption = legs.some(leg => isOptionAssetType(inferLegAssetType(leg)));
+  const hasStock = legs.some(leg => inferLegAssetType(leg) === 'Stock');
+  if (hasOption && hasStock) return 'mixed';
+  if (hasOption) return 'option';
+  if (hasStock) return 'stock';
+  return 'mixed';
+}
+
+function inferLegAssetType(leg: StrategyLegSnapshotInput): string {
+  if (leg.assetType?.trim()) return leg.assetType.trim();
+  if (leg.expiry || leg.putCall || leg.strike !== undefined) return 'StockOption';
+  return 'Stock';
+}
+
+function isOptionAssetType(assetType: string): boolean {
+  return assetType.toLowerCase().includes('option');
+}
+
+function priceFieldGroups(assetType: string): string[] {
+  return isOptionAssetType(assetType)
+    ? ['Quote', 'Greeks', 'InstrumentPriceDetails']
+    : ['Quote', 'PriceInfoDetails', 'DisplayAndFormat'];
 }
 
 function readGreek(greeks: Record<string, number> | undefined, name: 'delta' | 'gamma' | 'theta' | 'vega'): number | undefined {
