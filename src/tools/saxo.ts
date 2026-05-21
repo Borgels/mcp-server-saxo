@@ -213,6 +213,7 @@ const portfolioObjectiveSchema = z.enum([
   'growth',
 ]);
 const deploymentStyleSchema = z.enum(['staged', 'immediate', 'watchlist']);
+const portfolioProfileSchema = z.enum(['balanced', 'concentrated_conviction']);
 const optionsModeSchema = z.enum(['guardrailed', 'user_driven']);
 const optionThesisRoleSchema = z.enum(['core_conviction', 'tactical_momentum', 'income', 'hedge', 'speculative']);
 const optionThesisHorizonSchema = z.enum(['short_term', 'swing', 'long_term', 'leaps']);
@@ -377,6 +378,7 @@ const portfolioStrategySchema = z.object({
   accountKey: z.string().trim().min(1),
   objective: portfolioObjectiveSchema.default('balanced_growth_income'),
   riskProfile: riskProfileSchema.default('balanced'),
+  portfolioProfile: portfolioProfileSchema.default('balanced'),
   deploymentStyle: deploymentStyleSchema.default('staged'),
   targetInvestedPercent: z.number().positive().max(100).optional(),
   cashReservePercent: z.number().min(0).max(95).optional(),
@@ -390,6 +392,12 @@ const portfolioStrategySchema = z.object({
   requireGreeks: z.boolean().default(false),
   maxThetaDailyPercentOfRisk: z.number().min(0).max(100).optional(),
   optionsMode: optionsModeSchema.default('guardrailed'),
+  fragmentationPolicy: z.enum(['warn', 'reject']).optional(),
+  maxContractsPerPosition: z.number().int().min(1).max(1000).optional(),
+  maxSelectedUnderlyings: z.number().int().min(1).max(25).optional(),
+  maxMonitoringSymbols: z.number().int().min(1).max(25).optional(),
+  minPositionRiskDollars: z.number().positive().optional(),
+  minPositionRiskPercent: z.number().positive().max(100).optional(),
   includeStocks: z.boolean().default(true),
   includeOptions: z.boolean().default(true),
   discoverOptionCandidates: z.boolean().default(false),

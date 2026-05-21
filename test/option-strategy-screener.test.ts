@@ -486,6 +486,40 @@ describe('screenOptionStrategies', () => {
     expect(result.optionsPortfolioPlan?.selectedCandidates.some(candidate => candidate.symbol === 'BBB')).toBe(true);
   });
 
+  it('supports concentrated conviction controls for fewer monitorable options positions', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        discoverOptionCandidates: true,
+        portfolioProfile: 'concentrated_conviction',
+        deploymentStyle: 'immediate',
+        maxSelectedUnderlyings: 1,
+        minPositionRiskDollars: 1_000,
+        maxContractsPerPosition: 20,
+        fragmentationPolicy: 'reject',
+        maxOptionsRiskPercent: 20,
+        maxThesisRiskPercent: 20,
+        maxSingleTradeRiskPercent: 20,
+        riskBudgetPercentPerIdea: 20,
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    const selectedSymbols = new Set(result.optionsPortfolioPlan?.selectedCandidates.map(candidate => candidate.symbol));
+    expect(selectedSymbols.size).toBeLessThanOrEqual(1);
+    expect(result.optionsPortfolioPlan?.selectedCandidates.every(candidate => (candidate.plannedRisk ?? 0) >= 1_000)).toBe(true);
+    expect(result.optionsPortfolioPlan?.rejectedCandidates.some(candidate =>
+      candidate.reason.includes('maxSelectedUnderlyings') ||
+      candidate.reason.includes('below minPositionRiskDollars') ||
+      candidate.reason.includes('maxContractsPerPosition'),
+    )).toBe(true);
+  });
+
   it('keeps option-root failures visible as rejected portfolio candidates', async () => {
     const client = testClient(strategyScreenerFetchMock());
 

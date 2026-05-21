@@ -41,10 +41,15 @@ export interface BuildOptionPortfolioPlanInput {
   discoveryTargetRiskPercent?: number;
   discoveryThesisName?: string;
   deploymentStyle: 'staged' | 'immediate' | 'watchlist';
+  fragmentationPolicy?: 'warn' | 'reject';
   maxOptionIdeas: number;
+  maxContractsPerPosition?: number;
+  maxSelectedUnderlyings?: number;
   maxOptionsRiskPercent: number;
   maxSingleTradeRiskPercent?: number;
   maxThesisRiskPercent?: number;
+  minPositionRiskDollars?: number;
+  minPositionRiskPercent?: number;
   netValue?: number;
   optionScreen?: ScreenOptionStrategiesResult;
   optionTheses?: OptionThesisInput[];
@@ -157,6 +162,7 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
   const theses = normalizeTheses(input);
   const rejected: OptionPortfolioRejectedCandidate[] = [];
   const selected: OptionPortfolioSelectedCandidate[] = [];
+  const selectedUnderlyings = new Set<string>();
   const thesisRiskUsed: Record<string, number> = {};
   let totalRiskUsed = 0;
 
@@ -188,6 +194,20 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
           symbol: plan.symbol,
           strategy: plan.strategy,
           reason: 'Rejected because maxOptionIdeas was reached.',
+          warnings: [],
+        });
+        continue;
+      }
+      if (
+        input.maxSelectedUnderlyings !== undefined &&
+        !selectedUnderlyings.has(plan.symbol) &&
+        selectedUnderlyings.size >= input.maxSelectedUnderlyings
+      ) {
+        rejected.push({
+          thesisName: thesis.name,
+          symbol: plan.symbol,
+          strategy: plan.strategy,
+          reason: `Rejected because maxSelectedUnderlyings=${input.maxSelectedUnderlyings} was reached.`,
           warnings: [],
         });
         continue;
@@ -232,9 +252,26 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
       });
       const recommendedContracts = sizing.recommendedContracts;
       const plannedRisk = recommendedContracts * riskPerContract;
+      const concentrationWarnings = [
+        ...positionRiskWarnings(plannedRisk, {
+          minPositionRiskDollars: resolveMinPositionRiskDollars(input, netValue),
+        }),
+        ...contractCountWarnings(recommendedContracts, input.maxContractsPerPosition),
+      ];
+      if (input.fragmentationPolicy === 'reject' && concentrationWarnings.length) {
+        rejected.push({
+          thesisName: thesis.name,
+          symbol: plan.symbol,
+          strategy: plan.strategy,
+          reason: concentrationWarnings.join(' '),
+          warnings: concentrationWarnings,
+        });
+        continue;
+      }
       totalRiskUsed += plannedRisk;
       thesisRiskUsed[thesis.name] = (thesisRiskUsed[thesis.name] ?? 0) + plannedRisk;
       selectedSymbols.add(plan.symbol);
+      selectedUnderlyings.add(plan.symbol);
       const brief = input.optionScreen?.decisionBriefs.find(item => item.rank === plan.rank && item.symbol === plan.symbol);
       selected.push({
         rank: selected.length + 1,
@@ -266,7 +303,7 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
         warnings: Array.from(new Set([
           ...(plan.keyRisks ?? []),
           ...plan.warnings,
-          ...contractCountWarnings(recommendedContracts),
+          ...concentrationWarnings,
         ])),
       });
       if (totalBudget !== undefined && totalRiskUsed >= totalBudget) {
@@ -447,7 +484,29 @@ function contractSizing(input: {
   return { recommendedContracts: Math.max(1, input.maxContracts), mode: 'budget_scaled' };
 }
 
-function contractCountWarnings(contracts: number): string[] {
+function resolveMinPositionRiskDollars(
+  input: Pick<BuildOptionPortfolioPlanInput, 'minPositionRiskDollars' | 'minPositionRiskPercent'>,
+  netValue: number | undefined,
+): number | undefined {
+  return input.minPositionRiskDollars ?? dollars(netValue, input.minPositionRiskPercent);
+}
+
+function positionRiskWarnings(
+  plannedRisk: number,
+  input: { minPositionRiskDollars?: number },
+): string[] {
+  if (input.minPositionRiskDollars !== undefined && plannedRisk < input.minPositionRiskDollars) {
+    return [
+      `Position risk ${formatMoney(plannedRisk)} is below minPositionRiskDollars ${formatMoney(input.minPositionRiskDollars)}; this may be too small to monitor efficiently.`,
+    ];
+  }
+  return [];
+}
+
+function contractCountWarnings(contracts: number, maxContractsPerPosition: number | undefined): string[] {
+  if (maxContractsPerPosition !== undefined && contracts > maxContractsPerPosition) {
+    return [`Contract count ${contracts} exceeds maxContractsPerPosition ${maxContractsPerPosition}; prefer a wider spread or a different structure.`];
+  }
   if (contracts > 25) {
     return [`Large contract count (${contracts}); verify displayed size, liquidity, and partial-fill risk before execution.`];
   }

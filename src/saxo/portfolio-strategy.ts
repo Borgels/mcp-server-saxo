@@ -24,11 +24,13 @@ import {
 
 export type PortfolioObjective = 'balanced_growth_income' | 'income_options' | 'capital_preservation' | 'growth';
 export type DeploymentStyle = 'staged' | 'immediate' | 'watchlist';
+export type PortfolioProfile = 'balanced' | 'concentrated_conviction';
 
 export interface PlanPortfolioStrategyInput {
   accountKey: string;
   objective?: PortfolioObjective;
   riskProfile?: RiskProfile;
+  portfolioProfile?: PortfolioProfile;
   deploymentStyle?: DeploymentStyle;
   targetInvestedPercent?: number;
   cashReservePercent?: number;
@@ -42,6 +44,12 @@ export interface PlanPortfolioStrategyInput {
   requireGreeks?: boolean;
   maxThetaDailyPercentOfRisk?: number;
   optionsMode?: OptionsMode;
+  fragmentationPolicy?: 'warn' | 'reject';
+  maxContractsPerPosition?: number;
+  maxSelectedUnderlyings?: number;
+  maxMonitoringSymbols?: number;
+  minPositionRiskDollars?: number;
+  minPositionRiskPercent?: number;
   includeStocks?: boolean;
   includeOptions?: boolean;
   discoverOptionCandidates?: boolean;
@@ -65,6 +73,7 @@ export interface PortfolioStrategyResult {
   filters: {
     objective: PortfolioObjective;
     riskProfile: RiskProfile;
+    portfolioProfile: PortfolioProfile;
     deploymentStyle: DeploymentStyle;
     targetInvestedPercent: number;
     cashReservePercent: number;
@@ -78,6 +87,12 @@ export interface PortfolioStrategyResult {
     requireGreeks: boolean;
     maxThetaDailyPercentOfRisk?: number;
     optionsMode: OptionsMode;
+    fragmentationPolicy: 'warn' | 'reject';
+    maxContractsPerPosition?: number;
+    maxSelectedUnderlyings?: number;
+    maxMonitoringSymbols?: number;
+    minPositionRiskDollars?: number;
+    minPositionRiskPercent?: number;
     includeStocks: boolean;
     includeOptions: boolean;
     discoverOptionCandidates: boolean;
@@ -175,6 +190,7 @@ export async function planPortfolioStrategy(
 ): Promise<PortfolioStrategyResult> {
   const objective = input.objective ?? 'balanced_growth_income';
   const riskProfile = input.riskProfile ?? 'balanced';
+  const portfolioProfile = input.portfolioProfile ?? 'balanced';
   const deploymentStyle = input.deploymentStyle ?? 'staged';
   const targetInvestedPercent = clampNumber(input.targetInvestedPercent ?? defaultTargetInvested(objective, riskProfile), 1, 100);
   const configuredCashReservePercent = clampNumber(input.cashReservePercent ?? defaultCashReserve(objective, riskProfile), 0, 95);
@@ -197,8 +213,14 @@ export async function planPortfolioStrategy(
   const includeStocks = input.includeStocks ?? true;
   const includeOptions = input.includeOptions ?? true;
   const discoverOptionCandidates = input.discoverOptionCandidates ?? false;
+  const maxMonitoringSymbols = input.maxMonitoringSymbols ?? (portfolioProfile === 'concentrated_conviction' ? 5 : undefined);
+  const maxSelectedUnderlyings = input.maxSelectedUnderlyings ?? maxMonitoringSymbols;
+  const minPositionRiskDollars = input.minPositionRiskDollars;
+  const minPositionRiskPercent = input.minPositionRiskPercent ?? (portfolioProfile === 'concentrated_conviction' ? 5 : undefined);
+  const maxContractsPerPosition = input.maxContractsPerPosition ?? (portfolioProfile === 'concentrated_conviction' ? 20 : undefined);
+  const fragmentationPolicy = input.fragmentationPolicy ?? (portfolioProfile === 'concentrated_conviction' ? 'reject' : 'warn');
   const maxStockIdeas = clampInt(input.maxStockIdeas ?? 8, 1, 25);
-  const maxOptionIdeas = clampInt(input.maxOptionIdeas ?? 6, 1, 25);
+  const maxOptionIdeas = clampInt(input.maxOptionIdeas ?? (portfolioProfile === 'concentrated_conviction' ? 5 : 6), 1, 25);
   const warnings: string[] = [];
 
   const stockScreen = includeStocks
@@ -268,10 +290,15 @@ export async function planPortfolioStrategy(
     accountContext,
     cashReserveDollars,
     deploymentStyle,
+    fragmentationPolicy,
     maxOptionIdeas,
+    maxContractsPerPosition,
+    maxSelectedUnderlyings,
     maxOptionsRiskPercent,
     maxSingleTradeRiskPercent,
     maxThesisRiskPercent,
+    minPositionRiskDollars,
+    minPositionRiskPercent,
     netValue,
     optionScreen,
     optionTheses: input.optionTheses,
@@ -313,6 +340,7 @@ export async function planPortfolioStrategy(
     filters: {
       objective,
       riskProfile,
+      portfolioProfile,
       deploymentStyle,
       targetInvestedPercent,
       cashReservePercent,
@@ -326,6 +354,12 @@ export async function planPortfolioStrategy(
       requireGreeks,
       maxThetaDailyPercentOfRisk,
       optionsMode,
+      fragmentationPolicy,
+      maxContractsPerPosition,
+      maxSelectedUnderlyings,
+      maxMonitoringSymbols,
+      minPositionRiskDollars,
+      minPositionRiskPercent,
       includeStocks,
       includeOptions,
       discoverOptionCandidates,

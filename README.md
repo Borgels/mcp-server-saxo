@@ -346,6 +346,7 @@ conviction risk:
   "accountKey": "your-account-key",
   "objective": "balanced_growth_income",
   "riskProfile": "balanced",
+  "portfolioProfile": "concentrated_conviction",
   "deploymentStyle": "staged",
   "targetInvestedPercent": 80,
   "cashReservePercent": 10,
@@ -354,6 +355,10 @@ conviction risk:
   "maxSectorPercent": 35,
   "maxOptionsRiskPercent": 5,
   "riskBudgetPercentPerIdea": 1,
+  "maxSelectedUnderlyings": 5,
+  "minPositionRiskDollars": 2500,
+  "maxContractsPerPosition": 20,
+  "fragmentationPolicy": "reject",
   "requireGreeks": true,
   "maxThetaDailyPercentOfRisk": 1,
   "discoverOptionCandidates": true,
@@ -396,6 +401,10 @@ Set `discoverOptionCandidates=true` to blend user-supplied conviction theses
 with a deterministic discovery sleeve from Saxo's market mover and option
 screeners. Discovery candidates are still filtered by liquidity, Greeks, theta,
 account sizing, and the same portfolio risk caps.
+Use `portfolioProfile="concentrated_conviction"` plus
+`maxSelectedUnderlyings`, `minPositionRiskDollars`, `maxContractsPerPosition`,
+and `fragmentationPolicy="reject"` when the account should favor fewer,
+larger, easier-to-monitor option positions instead of many small trades.
 
 ## Tools
 
