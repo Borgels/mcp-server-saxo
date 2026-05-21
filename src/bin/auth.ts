@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { upsertEnvFile } from '../saxo/env-file.js';
 import {
   completeOauthFlow,
   loadOauthConfigFromEnv,
+  openBrowser,
   startOauthFlow,
 } from '../saxo/oauth.js';
 import { resolveEnvironment, type SaxoEnvironment } from '../saxo/environment.js';
@@ -107,26 +107,6 @@ Environment variables required:
     (e.g. http://localhost/callback); the URL sent by this CLI keeps the
     port and Saxo matches port-blind.
 `);
-}
-
-function openBrowser(url: string): void {
-  // On Windows `start` is a cmd builtin, not an executable, so we have to go
-  // through a URL handler. Avoid `cmd /c start`: OAuth URLs contain `&`, and
-  // cmd treats that as a command separator unless quoting is exactly right.
-  const isWindows = process.platform === 'win32';
-  const command = isWindows ? 'rundll32.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
-  const args = isWindows ? ['url.dll,FileProtocolHandler', url] : [url];
-  try {
-    const child = spawn(command, args, { stdio: 'ignore', detached: true });
-    // spawn() emits ENOENT asynchronously via 'error' if the binary is missing —
-    // a try/catch around spawn() will not catch it. Swallow it explicitly.
-    child.on('error', () => {
-      // ignore — user can copy/paste the URL printed earlier.
-    });
-    child.unref();
-  } catch {
-    // ignore — user can copy/paste the URL printed earlier.
-  }
 }
 
 main().catch(error => {

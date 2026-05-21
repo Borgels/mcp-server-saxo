@@ -667,16 +667,33 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['multileg', 'cancel', 'spread'],
   },
   {
+    id: 'saxo_oauth_login',
+    title: 'Run Saxo OAuth Login',
+    description:
+      'Run a full Saxo OAuth2 + PKCE login in one MCP call. Starts a loopback listener, optionally opens the browser, waits for approval, exchanges tokens, updates the running MCP server, and optionally persists tokens to an env file.',
+    risk: 'write',
+    examples: [{ environment: 'live', openBrowser: true, timeoutSeconds: 180, writeToEnvFile: false }],
+    identifierFormats: ['environment: sim|live'],
+    safetyNotes: [
+      'Does not place trades; classified as write because it changes authentication state.',
+      'Uses SAXO_APP_KEY/SAXO_APP_SECRET from the MCP server runtime environment, which may come from an MCPB/client config rather than a local env file.',
+      'Tokens are stored in memory by default. Set writeToEnvFile=true only when file persistence is desired.',
+      'Only listens on loopback (127.0.0.1/localhost).',
+    ],
+    keywords: ['oauth', 'login', 'token', 'pkce', 'authorize', 'browser'],
+  },
+  {
     id: 'saxo_oauth_start',
     title: 'Start Saxo OAuth Login',
     description:
-      'Begin a Saxo OAuth2 + PKCE login. Returns a ticketId, an authorize URL the user opens in their browser, and the loopback redirect URI. Requires SAXO_APP_KEY + SAXO_APP_SECRET in the MCP server environment.',
+      'Begin a Saxo OAuth2 + PKCE login. Returns a ticketId, an authorize URL, and the loopback redirect URI. Can optionally open the browser. Requires SAXO_APP_KEY + SAXO_APP_SECRET in the MCP server environment.',
     risk: 'write',
-    examples: [{ environment: 'sim' }],
+    examples: [{ environment: 'sim', openBrowser: false }],
     identifierFormats: ['environment: sim|live'],
     safetyNotes: [
       'Only listens on loopback (127.0.0.1).',
       'Tokens never leave the MCP server process unless writeToEnvFile is set.',
+      'Use saxo_oauth_login for the smoother one-call local flow.',
     ],
     keywords: ['oauth', 'login', 'token', 'pkce', 'authorize'],
   },

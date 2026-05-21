@@ -149,13 +149,19 @@ authorize endpoint with a PKCE challenge, and writes
 
 **Option B — From inside the MCP client (`saxo_oauth_*` tools):**
 
-1. Set `SAXO_APP_KEY` + `SAXO_APP_SECRET` in the MCP server environment.
-2. Call `saxo_oauth_start` from your MCP client. It returns an `authorizeUrl`
-   and a `ticketId`.
-3. The user opens `authorizeUrl` in a browser and approves.
-4. Call `saxo_oauth_complete` with the `ticketId`. The server exchanges the
-   code for tokens and updates itself. Set `writeToEnvFile=true` to also
-   persist them to `.env`.
+1. Set `SAXO_APP_KEY` + `SAXO_APP_SECRET` in the MCP server environment. In
+   packaged clients such as Claude Desktop / MCPB this usually means client
+   config, not a local env file.
+2. For the smooth local flow, call `saxo_oauth_login`. It starts the loopback
+   listener, opens the browser by default, waits for approval, exchanges the
+   code, and updates the running MCP server in memory.
+3. Tokens are not written to disk unless `writeToEnvFile=true` is supplied.
+   Use `envFilePath` when you want a specific file such as `.env.local`.
+
+For clients that want to control their own UI, use the lower-level two-step
+flow: call `saxo_oauth_start`, open the returned `authorizeUrl` (or set
+`openBrowser=true`), then call `saxo_oauth_complete` with the returned
+`ticketId`.
 
 The MCP server only listens on loopback (`127.0.0.1`) for the callback, so the
 flow never touches the public network beyond Saxo itself.
@@ -477,6 +483,7 @@ rules.
 | `saxo_place_multileg_order` | `POST /trade/v2/orders/multileg` | Place a spread atomically with a single net debit/credit limit. |
 | `saxo_modify_multileg_order` | `PATCH /trade/v2/orders/multileg` | Adjust spread Amount or OrderPrice. |
 | `saxo_cancel_multileg_order` | `DELETE /trade/v2/orders/multileg/{id}` | Cancel the whole strategy. |
+| `saxo_oauth_login` | OAuth2 PKCE | One-call local login; updates in-process tokens. Optional env-file persist. |
 | `saxo_oauth_start` | OAuth2 PKCE | Loopback redirect only; reads app creds from env. |
 | `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional `.env` persist. |
 | `saxo_oauth_cancel` | — | Closes a pending OAuth listener. |

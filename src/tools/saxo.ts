@@ -71,6 +71,7 @@ import {
   cancelOauthFlow,
   completeOauthFlow,
   loadOauthConfigFromEnv,
+  openBrowser,
   startOauthFlow,
 } from '../saxo/oauth.js';
 
@@ -1216,13 +1217,63 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 
   server.registerTool(
+    'saxo_oauth_login',
+    {
+      title: 'Run Saxo OAuth Login',
+      description:
+        'Run the full Saxo OAuth2 + PKCE login in one MCP call. Starts a loopback callback listener, optionally opens the browser, waits for approval, exchanges tokens, updates the running MCP server, and optionally persists tokens to an env file.',
+      inputSchema: {
+        environment: z.enum(['sim', 'live']).optional(),
+        timeoutSeconds: z.number().int().min(5).max(900).default(180),
+        openBrowser: z.boolean().default(true),
+        writeToEnvFile: z.boolean().default(false),
+        envFilePath: z.string().trim().min(1).optional(),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_oauth_login', input, async () => {
+        const config = loadOauthConfigFromEnv(input.environment);
+        const flow = startOauthFlow(config);
+        const browserOpened = input.openBrowser ? openBrowser(flow.authorizeUrl) : false;
+
+        try {
+          const { tokens, environment } = await completeOauthFlow(flow.ticketId, input.timeoutSeconds * 1000);
+          client.setTokens(tokens);
+
+          const envFilePath = input.writeToEnvFile
+            ? await persistOauthTokens(environment, tokens, input.envFilePath)
+            : undefined;
+
+          return jsonToolResult({
+            status: 'ok',
+            environment,
+            redirectUri: flow.redirectUri,
+            browserOpened,
+            expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt).toISOString() : undefined,
+            hasRefreshToken: Boolean(tokens.refreshToken),
+            tokenStorage: input.writeToEnvFile ? 'env_file' : 'memory',
+            envFilePath,
+            warnings: environment !== client.environment
+              ? [`Authenticated ${environment}, but the running Saxo client was constructed for ${client.environment}. Restart the MCP server with SAXO_ENVIRONMENT=${environment} before using the token.`]
+              : [],
+          });
+        } catch (error) {
+          cancelOauthFlow(flow.ticketId);
+          throw error;
+        }
+      }),
+  );
+
+  server.registerTool(
     'saxo_oauth_start',
     {
       title: 'Start Saxo OAuth Login',
       description:
-        'Begin a Saxo OAuth2 + PKCE login. Requires SAXO_APP_KEY + SAXO_APP_SECRET in the MCP server environment. Returns a ticketId and an authorizeUrl — open the URL in your browser, then call saxo_oauth_complete with the ticketId.',
+        'Begin a Saxo OAuth2 + PKCE login. Requires SAXO_APP_KEY + SAXO_APP_SECRET in the MCP server environment. Returns a ticketId and an authorizeUrl, optionally opening it in the browser. Then call saxo_oauth_complete with the ticketId.',
       inputSchema: {
         environment: z.enum(['sim', 'live']).optional(),
+        openBrowser: z.boolean().default(false),
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
@@ -1230,11 +1281,13 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
       runAuditedTool(client, 'saxo_oauth_start', input, async () => {
         const config = loadOauthConfigFromEnv(input.environment);
         const flow = startOauthFlow(config);
+        const browserOpened = input.openBrowser ? openBrowser(flow.authorizeUrl) : false;
         return jsonToolResult({
           ticketId: flow.ticketId,
           authorizeUrl: flow.authorizeUrl,
           redirectUri: flow.redirectUri,
           environment: flow.environment,
+          browserOpened,
           instructions:
             'Open authorizeUrl in your browser, approve the consent, then call saxo_oauth_complete with this ticketId.',
         });
@@ -1261,27 +1314,16 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
 
         client.setTokens(tokens);
 
-        let envFilePath: string | undefined;
-        if (input.writeToEnvFile) {
-          envFilePath = resolve(process.cwd(), input.envFilePath ?? '.env');
-          const entries: Record<string, string> = {
-            SAXO_ENVIRONMENT: environment,
-            SAXO_ACCESS_TOKEN: tokens.accessToken,
-          };
-          if (tokens.refreshToken) {
-            entries.SAXO_REFRESH_TOKEN = tokens.refreshToken;
-          }
-          if (tokens.expiresAt) {
-            entries.SAXO_TOKEN_EXPIRES_AT = new Date(tokens.expiresAt).toISOString();
-          }
-          await upsertEnvFile(envFilePath, entries);
-        }
+        const envFilePath = input.writeToEnvFile
+          ? await persistOauthTokens(environment, tokens, input.envFilePath)
+          : undefined;
 
         return jsonToolResult({
           status: 'ok',
           environment,
           expiresAt: tokens.expiresAt ? new Date(tokens.expiresAt).toISOString() : undefined,
           hasRefreshToken: Boolean(tokens.refreshToken),
+          tokenStorage: input.writeToEnvFile ? 'env_file' : 'memory',
           envFilePath,
         });
       }),
@@ -1302,6 +1344,26 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
         jsonToolResult({ cancelled: cancelOauthFlow(input.ticketId) }),
       ),
   );
+}
+
+async function persistOauthTokens(
+  environment: string,
+  tokens: { accessToken: string; refreshToken?: string; expiresAt?: number },
+  envFilePathInput?: string,
+): Promise<string> {
+  const envFilePath = resolve(process.cwd(), envFilePathInput ?? '.env');
+  const entries: Record<string, string> = {
+    SAXO_ENVIRONMENT: environment,
+    SAXO_ACCESS_TOKEN: tokens.accessToken,
+  };
+  if (tokens.refreshToken) {
+    entries.SAXO_REFRESH_TOKEN = tokens.refreshToken;
+  }
+  if (tokens.expiresAt) {
+    entries.SAXO_TOKEN_EXPIRES_AT = new Date(tokens.expiresAt).toISOString();
+  }
+  await upsertEnvFile(envFilePath, entries);
+  return envFilePath;
 }
 
 function applyOrderPolicy(order: OrderPolicyInput): void {

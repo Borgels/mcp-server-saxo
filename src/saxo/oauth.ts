@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { spawn } from 'node:child_process';
 import { exchangeCodeForTokens, type SaxoTokenSet } from './auth.js';
 import { readEnv } from './env.js';
 import {
@@ -213,6 +214,25 @@ export function cancelOauthFlow(ticketId: string): boolean {
 
 export function getPendingTicketIds(): string[] {
   return Array.from(flows.keys());
+}
+
+export function openBrowser(url: string): boolean {
+  // On Windows `start` is a cmd builtin, not an executable, so go through
+  // the URL handler. Avoid `cmd /c start`: OAuth URLs contain `&`, which cmd
+  // treats as command separators unless quoting is exactly right.
+  const isWindows = process.platform === 'win32';
+  const command = isWindows ? 'rundll32.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = isWindows ? ['url.dll,FileProtocolHandler', url] : [url];
+  try {
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.on('error', () => {
+      // ignore - caller still has the authorize URL for manual fallback.
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function base64UrlEncode(buffer: Buffer): string {
