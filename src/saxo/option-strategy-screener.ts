@@ -28,6 +28,7 @@ export interface ScreenOptionStrategiesInput {
   minDte?: number;
   maxDte?: number;
   allowShortOptionLegs?: boolean;
+  restrictedShortCallSymbols?: string[];
   maxUnderlyings?: number;
   maxUnderlyingScan?: number;
   maxSymbolsToPlan?: number;
@@ -343,6 +344,7 @@ export async function screenOptionStrategies(
   const maxSymbolsToPlan = clampInt(input.maxSymbolsToPlan ?? 5, 1, 10);
   const maxPlans = clampInt(input.maxPlans ?? 10, 1, 25);
   const allowShortOptionLegs = input.allowShortOptionLegs ?? true;
+  const restrictedShortCallSymbols = input.restrictedShortCallSymbols;
   const requireGreeks = input.requireGreeks ?? false;
   const maxThetaDailyPercentOfRisk = input.maxThetaDailyPercentOfRisk;
   const includeAccountContext = input.includeAccountContext ?? true;
@@ -428,6 +430,7 @@ export async function screenOptionStrategies(
         maxCandidates: Math.min(8, maxPlans),
         riskBudget: input.riskBudget,
         allowShortOptionLegs,
+        restrictedShortCallSymbols,
         requireGreeks,
         maxThetaDailyPercentOfRisk,
         minOpenInterest,

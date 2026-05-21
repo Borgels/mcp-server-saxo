@@ -181,6 +181,35 @@ describe('options tools', () => {
       expect.stringMatching(/allowShortOptionLegs=false/),
     ]));
   });
+
+  it('filters short call strategies for restricted underlyings', async () => {
+    const fetchMock = optionFetchMock();
+    const client = testClient(fetchMock);
+
+    const result = await planOptionStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        keywords: 'AAPL',
+        strategies: ['long_call', 'debit_spread'],
+        restrictedShortCallSymbols: ['AAPL'],
+        maxCandidates: 10,
+        minOpenInterest: 10,
+        maxSpreadPercent: 25,
+        includeVolatilityContext: false,
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.Data.length).toBeGreaterThan(0);
+    expect(result.Data.every(plan => plan.strategy === 'long_call')).toBe(true);
+    expect(result.Data.every(plan =>
+      plan.legs.every(leg => !(leg.buySell === 'Sell' && leg.putCall === 'Call')),
+    )).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/restrictedShortCallSymbols/),
+    ]));
+  });
 });
 
 function testClient(fetchMock: typeof fetch): SaxoClient {

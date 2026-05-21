@@ -44,6 +44,7 @@ export interface PlanOptionStrategyInput extends GetOptionChainInput {
   maxCandidates?: number;
   riskBudget?: number;
   allowShortOptionLegs?: boolean;
+  restrictedShortCallSymbols?: string[];
   requireGreeks?: boolean;
   maxThetaDailyPercentOfRisk?: number;
   minOpenInterest?: number;
@@ -439,8 +440,9 @@ export async function planOptionStrategy(
 
   const { plans: greekFilteredPlans, missingGreeksCount, thetaFilteredCount } = filterByGreekRequirements(prefilteredPlans, input);
   warnings.push(...greekFilterWarnings({ missingGreeksCount, thetaFilteredCount }, input));
-  const { plans: permissionFilteredPlans, shortOptionFilteredCount } = filterByShortOptionPermission(greekFilteredPlans, input);
-  warnings.push(...shortOptionPermissionWarnings({ shortOptionFilteredCount }, input));
+  const { plans: permissionFilteredPlans, shortOptionFilteredCount, restrictedShortCallFilteredCount } =
+    filterByShortOptionPermission(greekFilteredPlans, input, chain.optionRoot);
+  warnings.push(...shortOptionPermissionWarnings({ shortOptionFilteredCount, restrictedShortCallFilteredCount }, input));
 
   const ranked = permissionFilteredPlans
     .sort((a, b) => b.score.total - a.score.total)
@@ -1306,19 +1308,54 @@ function filterByGreekRequirements(plans: OptionStrategyPlan[], input: PlanOptio
   return { plans: filtered, missingGreeksCount, thetaFilteredCount };
 }
 
-function filterByShortOptionPermission(plans: OptionStrategyPlan[], input: PlanOptionStrategyInput): {
+function filterByShortOptionPermission(
+  plans: OptionStrategyPlan[],
+  input: PlanOptionStrategyInput,
+  optionRoot: OptionChainResult['optionRoot'],
+): {
   plans: OptionStrategyPlan[];
   shortOptionFilteredCount: number;
+  restrictedShortCallFilteredCount: number;
 } {
-  if (input.allowShortOptionLegs !== false) {
-    return { plans, shortOptionFilteredCount: 0 };
-  }
+  let shortOptionFilteredCount = 0;
+  let restrictedShortCallFilteredCount = 0;
+  const filtered = plans.filter(plan => {
+    const hasShortOptionLeg = plan.legs.some(legItem => legItem.buySell === 'Sell');
+    if (input.allowShortOptionLegs === false && hasShortOptionLeg) {
+      shortOptionFilteredCount += 1;
+      return false;
+    }
 
-  const filtered = plans.filter(plan => !plan.legs.some(legItem => legItem.buySell === 'Sell'));
+    const hasShortCallLeg = plan.legs.some(legItem => legItem.buySell === 'Sell' && legItem.putCall === 'Call');
+    if (hasShortCallLeg && isRestrictedShortCallSymbol(input, optionRoot)) {
+      restrictedShortCallFilteredCount += 1;
+      return false;
+    }
+    return true;
+  });
   return {
     plans: filtered,
-    shortOptionFilteredCount: plans.length - filtered.length,
+    shortOptionFilteredCount,
+    restrictedShortCallFilteredCount,
   };
+}
+
+function isRestrictedShortCallSymbol(
+  input: PlanOptionStrategyInput,
+  optionRoot: OptionChainResult['optionRoot'],
+): boolean {
+  const restricted = input.restrictedShortCallSymbols?.map(normalizeSymbolRestriction) ?? [];
+  if (restricted.length === 0) {
+    return false;
+  }
+  const candidates = [
+    input.keywords,
+    optionRoot.symbol,
+    optionRoot.description,
+  ].map(normalizeSymbolRestriction).filter(Boolean);
+  return restricted.some(symbol =>
+    candidates.some(candidate => candidate === symbol || candidate.startsWith(`${symbol}:`)),
+  );
 }
 
 function hasCompleteCoreGreeks(greeks: StrategyGreeks | undefined): boolean {
@@ -1346,15 +1383,25 @@ function greekFilterWarnings(
 }
 
 function shortOptionPermissionWarnings(
-  counts: { shortOptionFilteredCount: number },
+  counts: { shortOptionFilteredCount: number; restrictedShortCallFilteredCount: number },
   input: PlanOptionStrategyInput,
 ): string[] {
-  if (input.allowShortOptionLegs !== false || counts.shortOptionFilteredCount === 0) {
-    return [];
+  const warnings: string[] = [];
+  if (input.allowShortOptionLegs === false && counts.shortOptionFilteredCount > 0) {
+    warnings.push(
+      `Filtered ${counts.shortOptionFilteredCount} option candidate(s) because allowShortOptionLegs=false and the strategy opens a short option leg.`,
+    );
   }
-  return [
-    `Filtered ${counts.shortOptionFilteredCount} option candidate(s) because allowShortOptionLegs=false and the strategy opens a short option leg.`,
-  ];
+  if (counts.restrictedShortCallFilteredCount > 0) {
+    warnings.push(
+      `Filtered ${counts.restrictedShortCallFilteredCount} option candidate(s) because restrictedShortCallSymbols blocks sell-to-open call legs for this underlying.`,
+    );
+  }
+  return warnings;
+}
+
+function normalizeSymbolRestriction(value: string | undefined): string {
+  return (value ?? '').trim().toUpperCase();
 }
 
 function aggregateStrategyGreeks(

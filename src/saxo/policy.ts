@@ -120,6 +120,7 @@ export interface OrderPolicyInput {
   AssetType?: string;
   Amount?: number;
   BuySell?: 'Buy' | 'Sell';
+  ToOpenClose?: 'ToOpen' | 'ToClose';
   OrderType?: string;
   OrderPrice?: number;
   StopPrice?: number;

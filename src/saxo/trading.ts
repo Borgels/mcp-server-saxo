@@ -32,6 +32,7 @@ export interface PlaceOrderInput {
   AssetType: string;
   BuySell: 'Buy' | 'Sell';
   Amount: number;
+  ToOpenClose?: 'ToOpen' | 'ToClose';
   OrderType: string;
   OrderDuration: OrderDuration;
   OrderPrice?: number;
