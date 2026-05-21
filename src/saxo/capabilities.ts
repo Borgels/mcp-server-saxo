@@ -392,6 +392,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       {
         accountKey: 'AccountKey...',
         strategySnapshotPath: './live-options-actual-strategy.json',
+        reviewDepth: 'deep',
         defaultRules: {
           profitTakePercentOfCost: 25,
           lossExitPercentOfCost: 10,
@@ -440,6 +441,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Read-only review. Does not call precheck, place, modify, or cancel orders.',
       'Requires the executed strategy legs or a saved strategySnapshotPath / SAXO_STRATEGY_SNAPSHOT_PATH to evaluate a position as part of a named strategy.',
       'Stock reviews use entry cost/price rules; option reviews additionally use Greeks, theta, expiry, roll, underlying-price thesis invalidation, and max-profit/max-risk rules when supplied.',
+      'Use reviewDepth=status for fast P/L and risk, standard for Saxo technical/liquidity context, and deep for technical, liquidity, news, earnings, and fundamentals when providers are configured.',
       'Option strategies can include probabilityOfProfit plus expectedProfit/expectedLoss for a simple deterministic expected-value estimate.',
       'portfolioStatus summarizes cash, working orders, total current strategy value, total P/L, aggregate Greeks, and verdict counts.',
       'Returns decision support verdicts such as hold, review, consider_trim, consider_close, and roll_watch.',

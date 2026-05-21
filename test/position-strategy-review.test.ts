@@ -214,6 +214,46 @@ describe('reviewStrategyPositions', () => {
       currentValue: 1200,
     });
   });
+
+  it('adds technical and liquidity context for stock strategy reviews', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(
+      client,
+      {
+        accountKey: 'account-1',
+        reviewDepth: 'standard',
+        strategyPositions: [
+          {
+            name: 'AAA core stock',
+            symbol: 'AAA',
+            strategy: 'stock_core',
+            entryPrice: 100,
+            legs: [
+              { uic: 201, assetType: 'Stock', buySell: 'Buy', amount: 10 },
+            ],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.reviews[0]?.technicalContext).toMatchObject({
+      source: 'saxo_chart',
+      bias: 'bullish',
+      metrics: expect.objectContaining({
+        sma20: expect.any(Number),
+      }),
+    });
+    expect(result.reviews[0]?.liquidityContext).toMatchObject({
+      source: 'saxo_prices',
+      volume: 123456,
+    });
+  });
 });
 
 function followUpFetchMock(): typeof fetch {
@@ -271,6 +311,7 @@ function followUpFetchMock(): typeof fetch {
               Uic: 201,
               AssetType: 'Stock',
               Quote: { Bid: 119.5, Ask: 120.5, Mid: 120 },
+              PriceInfoDetails: { Volume: 123456 },
             },
           ],
         });
@@ -288,6 +329,18 @@ function followUpFetchMock(): typeof fetch {
             Greeks: { Delta: 0.35, Gamma: 0.01, Theta: -0.03, Vega: 0.12 },
           },
         ],
+      });
+    }
+    if (parsed.pathname.endsWith('/chart/v3/charts')) {
+      return jsonResponse({
+        Data: Array.from({ length: 90 }, (_, index) => {
+          const close = 80 + index * 0.5;
+          return {
+            Close: close,
+            High: close * 1.01,
+            Low: close * 0.99,
+          };
+        }),
       });
     }
     throw new Error(`Unexpected request ${parsed.pathname}`);

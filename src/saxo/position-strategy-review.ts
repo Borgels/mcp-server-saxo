@@ -1,5 +1,12 @@
 import { readFileSync } from 'node:fs';
 import type { SaxoClient } from './client.js';
+import {
+  getMarketFundamentalsContext,
+  getMarketNewsContext,
+  type MarketContextProvider,
+  type MarketFundamentalsContext,
+  type MarketNewsContext,
+} from './market-context.js';
 import { contractMultiplier } from './policy.js';
 import { getInfoPricesList } from './prices.js';
 import { getBalance, listOrders, listPositions } from './portfolio.js';
@@ -7,6 +14,7 @@ import { readEnv } from './env.js';
 
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
 export type StrategyInstrumentType = 'stock' | 'option' | 'mixed';
+export type StrategyReviewDepth = 'status' | 'standard' | 'deep';
 
 export interface StrategyLegSnapshotInput {
   uic: number;
@@ -28,6 +36,8 @@ export interface StrategyFollowUpInput {
     symbol?: string;
     strategy?: string;
     openedAt?: string;
+    underlyingUic?: number;
+    underlyingAssetType?: string;
     entryPrice?: number;
     entryCost?: number;
     entryProceeds?: number;
@@ -64,6 +74,17 @@ export interface StrategyFollowUpInput {
     thesisInvalidAbove?: number;
     maxThetaDailyPercentOfRisk?: number;
   };
+  reviewDepth?: StrategyReviewDepth;
+  includeTechnicalContext?: boolean;
+  includeNewsContext?: boolean;
+  includeFundamentalsContext?: boolean;
+  includeLiquidityContext?: boolean;
+  newsProvider?: MarketContextProvider;
+  newsLookbackDays?: number;
+  newsLimit?: number;
+  earningsHorizon?: '3month' | '6month' | '12month';
+  technicalHorizon?: number;
+  technicalBars?: number;
 }
 
 export interface StrategyFollowUpResult {
@@ -127,6 +148,10 @@ export interface StrategyFollowUpResult {
       vega?: number;
       thetaDailyPercentOfRisk?: number;
     };
+    technicalContext?: TechnicalReviewContext;
+    newsContext?: MarketNewsContext;
+    fundamentalsContext?: MarketFundamentalsContext;
+    liquidityContext?: LiquidityReviewContext;
     expectedValue?: {
       probabilityOfProfit?: number;
       expectedProfit?: number;
@@ -155,12 +180,81 @@ export interface StrategyFollowUpResult {
 interface InfoPrice {
   Uic?: number;
   AssetType?: string;
+  InstrumentPriceDetails?: {
+    OpenInterest?: number;
+  };
+  PriceInfoDetails?: {
+    Volume?: number;
+  };
   Greeks?: Record<string, number>;
   Quote?: {
     Ask?: number;
     Bid?: number;
     Mid?: number;
   };
+}
+
+interface TechnicalReviewContext {
+  source: 'saxo_chart';
+  horizon: number;
+  bars: number;
+  bias: 'bullish' | 'bearish' | 'neutral';
+  summary: string;
+  riskNotes: string[];
+  metrics: {
+    lastClose?: number;
+    return5dPercent?: number;
+    return20dPercent?: number;
+    sma20?: number;
+    sma50?: number;
+    distanceToSma20Percent?: number;
+    distanceToSma50Percent?: number;
+    annualizedVolatilityPercent?: number;
+    averageRange14dPercent?: number;
+  };
+}
+
+interface LiquidityReviewContext {
+  source: 'saxo_prices';
+  quoteSpreadPercent?: number;
+  maxLegQuoteSpreadPercent?: number;
+  volume?: number;
+  openInterest?: number;
+  notes: string[];
+}
+
+interface ReviewContextOptions {
+  includeTechnicalContext: boolean;
+  includeNewsContext: boolean;
+  includeFundamentalsContext: boolean;
+  includeLiquidityContext: boolean;
+  newsProvider: MarketContextProvider;
+  newsLookbackDays: number;
+  newsLimit: number;
+  earningsHorizon: '3month' | '6month' | '12month';
+  technicalHorizon: number;
+  technicalBars: number;
+}
+
+interface ChartBar {
+  Close?: number;
+  CloseAsk?: number;
+  CloseBid?: number;
+  CloseMid?: number;
+  High?: number;
+  HighAsk?: number;
+  HighBid?: number;
+  HighMid?: number;
+  Low?: number;
+  LowAsk?: number;
+  LowBid?: number;
+  LowMid?: number;
+}
+
+interface OhlcBar {
+  close: number;
+  high?: number;
+  low?: number;
 }
 
 interface StrategySnapshotFile {
@@ -184,6 +278,7 @@ export async function reviewStrategyPositions(
   }
   const accountKey = input.accountKey ?? snapshot?.accountKey;
   const defaultRules = { ...snapshot?.defaultRules, ...input.defaultRules };
+  const contextOptions = resolveReviewContextOptions(input);
   const positions = await listPositions(client, {
     accountKey,
     clientKey: input.clientKey,
@@ -204,9 +299,17 @@ export async function reviewStrategyPositions(
   const openAmountByUic = summarizeOpenAmounts(positionRows);
   const underlyingPriceByUic = summarizeUnderlyingPrices(positionRows);
   const priceByUic = await fetchStrategyPrices(client, strategies, accountKey, warnings);
+  const contextByIndex = await fetchReviewContexts(client, strategies, {
+    accountKey,
+    now,
+    options: contextOptions,
+    priceByUic,
+    warnings,
+  });
 
   const reviews = strategies.map((strategy, index) =>
     reviewOneStrategy(strategy, {
+      context: contextByIndex.get(index),
       defaultRules,
       now,
       openAmountByUic,
@@ -233,6 +336,24 @@ export async function reviewStrategyPositions(
     },
     reviews,
     warnings,
+  };
+}
+
+function resolveReviewContextOptions(input: StrategyFollowUpInput): ReviewContextOptions {
+  const depth = input.reviewDepth ?? 'status';
+  const standardOrDeep = depth === 'standard' || depth === 'deep';
+  const deep = depth === 'deep';
+  return {
+    includeTechnicalContext: input.includeTechnicalContext ?? standardOrDeep,
+    includeNewsContext: input.includeNewsContext ?? deep,
+    includeFundamentalsContext: input.includeFundamentalsContext ?? deep,
+    includeLiquidityContext: input.includeLiquidityContext ?? standardOrDeep,
+    newsProvider: input.newsProvider ?? 'auto',
+    newsLookbackDays: clampInt(input.newsLookbackDays ?? 7, 1, 30),
+    newsLimit: clampInt(input.newsLimit ?? 10, 1, 50),
+    earningsHorizon: input.earningsHorizon ?? '3month',
+    technicalHorizon: clampInt(input.technicalHorizon ?? 1440, 1, 10080),
+    technicalBars: clampInt(input.technicalBars ?? 90, 20, 1200),
   };
 }
 
@@ -320,6 +441,12 @@ function sumDefined(values: Array<number | undefined>): number | undefined {
 function reviewOneStrategy(
   strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
   context: {
+    context?: {
+      fundamentalsContext?: MarketFundamentalsContext;
+      liquidityContext?: LiquidityReviewContext;
+      newsContext?: MarketNewsContext;
+      technicalContext?: TechnicalReviewContext;
+    };
     defaultRules?: StrategyFollowUpInput['defaultRules'];
     fallbackName: string;
     now: Date;
@@ -343,7 +470,8 @@ function reviewOneStrategy(
   const netGreeks = aggregateGreeks(strategy.legs, context.priceByUic, entryMaxRisk);
   const expectedValue = expectedValueEstimate(strategy, entryMaxRisk);
   const daysToEarliestExpiry = earliestDte(strategy.legs, context.now);
-  const triggeredRules = triggeredFollowUpRules({
+  const triggeredRules = [
+    ...triggeredFollowUpRules({
     currentValue,
     currentUnderlyingPrice,
     daysToEarliestExpiry,
@@ -355,7 +483,9 @@ function reviewOneStrategy(
     rules,
     strategy,
     unrealizedPnL,
-  });
+    }),
+    ...triggeredContextRules(strategy, context.context),
+  ];
   const warnings = [
     openLegsMatched < strategy.legs.length ? 'One or more expected legs were not found in open positions.' : undefined,
     currentValue === undefined ? 'Current close value could not be estimated for all legs.' : undefined,
@@ -381,6 +511,10 @@ function reviewOneStrategy(
     unrealizedPnLPercentOfMaxRisk: percent(unrealizedPnL, entryMaxRisk),
     unrealizedPnLPercentOfMaxProfit: percent(unrealizedPnL, entryMaxProfit),
     netGreeks,
+    technicalContext: context.context?.technicalContext,
+    newsContext: context.context?.newsContext,
+    fundamentalsContext: context.context?.fundamentalsContext,
+    liquidityContext: context.context?.liquidityContext,
     expectedValue,
     triggeredRules,
     warnings,
@@ -506,6 +640,60 @@ function triggeredFollowUpRules(input: {
     triggered.push(`Theta rule reached: daily theta exceeds ${input.rules.maxThetaDailyPercentOfRisk}% of max risk.`);
   }
   return triggered;
+}
+
+function triggeredContextRules(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  context: {
+    fundamentalsContext?: MarketFundamentalsContext;
+    liquidityContext?: LiquidityReviewContext;
+    newsContext?: MarketNewsContext;
+    technicalContext?: TechnicalReviewContext;
+  } | undefined,
+): string[] {
+  const triggered: string[] = [];
+  if (!context) {
+    return triggered;
+  }
+  if (isBullishStrategy(strategy) && context.technicalContext?.bias === 'bearish') {
+    triggered.push('Technical review: bearish chart bias conflicts with bullish/long exposure.');
+  }
+  if (isBearishStrategy(strategy) && context.technicalContext?.bias === 'bullish') {
+    triggered.push('Technical review: bullish chart bias conflicts with bearish exposure.');
+  }
+  if (context.newsContext?.sentiment === 'bearish' && isBullishStrategy(strategy)) {
+    triggered.push('News review: bearish recent sentiment conflicts with bullish/long exposure.');
+  }
+  const earningsDays = context.newsContext?.earnings?.daysUntil;
+  if (earningsDays !== undefined && earningsDays >= 0 && earningsDays <= 10) {
+    triggered.push(`Event review: earnings are within ${earningsDays} day(s).`);
+  }
+  if ((context.liquidityContext?.maxLegQuoteSpreadPercent ?? 0) >= 12) {
+    triggered.push('Liquidity review: one or more legs have a wide bid/ask spread.');
+  }
+  if ((context.liquidityContext?.volume ?? 1) === 0) {
+    triggered.push('Liquidity review: latest stock volume was zero or unavailable as zero.');
+  }
+  if (context.fundamentalsContext?.riskNotes.some(note => /high beta|small-cap|negative profit|valuation/i.test(note))) {
+    triggered.push('Fundamentals review: one or more fundamental risk notes require review.');
+  }
+  return triggered;
+}
+
+function isBullishStrategy(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): boolean {
+  const name = `${strategy.strategy ?? ''} ${strategy.name ?? ''} ${strategy.thesisName ?? ''}`.toLowerCase();
+  if (name.includes('put') && name.includes('bear')) {
+    return false;
+  }
+  if (name.includes('short') && !name.includes('short call')) {
+    return false;
+  }
+  return strategy.legs.some(leg => leg.buySell === 'Buy');
+}
+
+function isBearishStrategy(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): boolean {
+  const name = `${strategy.strategy ?? ''} ${strategy.name ?? ''} ${strategy.thesisName ?? ''}`.toLowerCase();
+  return name.includes('bear') || name.includes('put debit') || name.includes('short stock');
 }
 
 function verdictFromRules(triggeredRules: string[], warnings: string[], dte: number | undefined): FollowUpVerdict {
@@ -662,6 +850,260 @@ async function fetchMultiLegStrategyPrices(
   }
 }
 
+async function fetchReviewContexts(
+  client: SaxoClient,
+  strategies: NonNullable<StrategyFollowUpInput['strategyPositions']>,
+  input: {
+    accountKey?: string;
+    now: Date;
+    options: ReviewContextOptions;
+    priceByUic: Map<number, InfoPrice>;
+    warnings: string[];
+  },
+): Promise<Map<number, {
+  fundamentalsContext?: MarketFundamentalsContext;
+  liquidityContext?: LiquidityReviewContext;
+  newsContext?: MarketNewsContext;
+  technicalContext?: TechnicalReviewContext;
+}>> {
+  const output = new Map<number, {
+    fundamentalsContext?: MarketFundamentalsContext;
+    liquidityContext?: LiquidityReviewContext;
+    newsContext?: MarketNewsContext;
+    technicalContext?: TechnicalReviewContext;
+  }>();
+
+  await Promise.all(strategies.map(async (strategy, index) => {
+    const context: {
+      fundamentalsContext?: MarketFundamentalsContext;
+      liquidityContext?: LiquidityReviewContext;
+      newsContext?: MarketNewsContext;
+      technicalContext?: TechnicalReviewContext;
+    } = {};
+    if (input.options.includeLiquidityContext) {
+      context.liquidityContext = buildLiquidityContext(strategy, input.priceByUic);
+    }
+    const symbol = reviewSymbol(strategy);
+    const instrument = input.options.includeTechnicalContext
+      ? await resolveUnderlyingInstrument(client, strategy, input.accountKey, input.warnings)
+      : undefined;
+    if (instrument && input.options.includeTechnicalContext) {
+      context.technicalContext = await buildReviewTechnicalContext(client, {
+        accountKey: input.accountKey,
+        assetType: instrument.assetType,
+        bars: input.options.technicalBars,
+        horizon: input.options.technicalHorizon,
+        now: input.now,
+        symbol: symbol ?? instrument.symbol ?? String(instrument.uic),
+        uic: instrument.uic,
+        warnings: input.warnings,
+      });
+    }
+    if (symbol && input.options.includeNewsContext) {
+      context.newsContext = await buildReviewNewsContext(symbol, {
+        earningsHorizon: input.options.earningsHorizon,
+        lookbackDays: input.options.newsLookbackDays,
+        newsLimit: input.options.newsLimit,
+        now: input.now,
+        provider: input.options.newsProvider,
+        warnings: input.warnings,
+      });
+    }
+    if (symbol && input.options.includeFundamentalsContext) {
+      context.fundamentalsContext = await buildReviewFundamentalsContext(symbol, {
+        now: input.now,
+        provider: input.options.newsProvider,
+        warnings: input.warnings,
+      });
+    }
+    output.set(index, context);
+  }));
+  return output;
+}
+
+function buildLiquidityContext(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  priceByUic: Map<number, InfoPrice>,
+): LiquidityReviewContext | undefined {
+  let maxLegQuoteSpreadPercent: number | undefined;
+  let quoteSpreadSum = 0;
+  let quoteSpreadCount = 0;
+  let volume: number | undefined;
+  let openInterest: number | undefined;
+  const notes: string[] = [];
+  for (const leg of strategy.legs) {
+    const price = priceByUic.get(leg.uic);
+    const bid = price?.Quote?.Bid;
+    const ask = price?.Quote?.Ask;
+    const midValue = price?.Quote?.Mid ?? mid(bid, ask);
+    if (bid !== undefined && ask !== undefined && midValue !== undefined && midValue > 0) {
+      const spreadPercent = Math.abs(ask - bid) / midValue * 100;
+      maxLegQuoteSpreadPercent = maxDefined(maxLegQuoteSpreadPercent, spreadPercent);
+      quoteSpreadSum += spreadPercent;
+      quoteSpreadCount += 1;
+    } else {
+      notes.push(`Leg ${leg.uic}: bid/ask spread unavailable.`);
+    }
+    volume = maxDefined(volume, price?.PriceInfoDetails?.Volume);
+    openInterest = maxDefined(openInterest, price?.InstrumentPriceDetails?.OpenInterest);
+  }
+  const quoteSpreadPercent = quoteSpreadCount ? quoteSpreadSum / quoteSpreadCount : undefined;
+  if ((maxLegQuoteSpreadPercent ?? 0) >= 12) {
+    notes.push('Wide bid/ask spread; use limit orders and smaller size.');
+  }
+  if (volume === 0) {
+    notes.push('Zero reported volume in latest price snapshot.');
+  }
+  if (quoteSpreadPercent === undefined && volume === undefined && openInterest === undefined && notes.length === 0) {
+    return undefined;
+  }
+  return {
+    source: 'saxo_prices',
+    quoteSpreadPercent: roundMoney(quoteSpreadPercent),
+    maxLegQuoteSpreadPercent: roundMoney(maxLegQuoteSpreadPercent),
+    volume,
+    openInterest,
+    notes,
+  };
+}
+
+async function resolveUnderlyingInstrument(
+  client: SaxoClient,
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  accountKey: string | undefined,
+  warnings: string[],
+): Promise<{ assetType: string; symbol?: string; uic: number } | undefined> {
+  if (strategy.underlyingUic !== undefined) {
+    return {
+      assetType: strategy.underlyingAssetType ?? 'Stock',
+      symbol: strategy.symbol,
+      uic: strategy.underlyingUic,
+    };
+  }
+  const stockLeg = strategy.legs.find(leg => inferLegAssetType(leg) === 'Stock');
+  if (stockLeg) {
+    return {
+      assetType: 'Stock',
+      symbol: strategy.symbol,
+      uic: stockLeg.uic,
+    };
+  }
+  const symbol = reviewSymbol(strategy);
+  if (!symbol) {
+    return undefined;
+  }
+  try {
+    const response = await client.get<{ Data?: Array<{
+      AssetType?: string;
+      Identifier?: number;
+      Symbol?: string;
+      SummaryType?: string;
+    }> }>('/ref/v1/instruments', {
+      AccountKey: accountKey,
+      AssetTypes: 'Stock',
+      Keywords: symbol,
+      $top: 10,
+    });
+    const picked = (response.Data ?? [])
+      .filter(item => item.AssetType === 'Stock' && typeof item.Identifier === 'number')
+      .sort((a, b) => stockInstrumentScore(b, symbol) - stockInstrumentScore(a, symbol))
+      .at(0);
+    return picked?.Identifier ? { assetType: 'Stock', symbol: picked.Symbol, uic: picked.Identifier } : undefined;
+  } catch (error) {
+    warnings.push(`${symbol}: underlying stock lookup unavailable: ${(error as Error).message}`);
+    return undefined;
+  }
+}
+
+async function buildReviewTechnicalContext(
+  client: SaxoClient,
+  input: {
+    accountKey?: string;
+    assetType: string;
+    bars: number;
+    horizon: number;
+    now: Date;
+    symbol: string;
+    uic: number;
+    warnings: string[];
+  },
+): Promise<TechnicalReviewContext | undefined> {
+  try {
+    const response = await client.get<{ Data?: ChartBar[] }>('/chart/v3/charts', {
+      AccountKey: input.accountKey,
+      AssetType: input.assetType,
+      Count: input.bars,
+      Horizon: input.horizon,
+      Mode: 'UpTo',
+      Time: input.now.toISOString(),
+      Uic: input.uic,
+    });
+    const bars = (response.Data ?? []).map(toOhlcBar).filter((bar): bar is OhlcBar => bar !== undefined);
+    return analyzeTechnicalContext(bars, {
+      horizon: input.horizon,
+      requestedBars: input.bars,
+      symbol: input.symbol,
+    });
+  } catch (error) {
+    input.warnings.push(`${input.symbol}: technical context unavailable: ${(error as Error).message}`);
+    return undefined;
+  }
+}
+
+async function buildReviewNewsContext(
+  symbol: string,
+  input: {
+    earningsHorizon: '3month' | '6month' | '12month';
+    lookbackDays: number;
+    newsLimit: number;
+    now: Date;
+    provider: MarketContextProvider;
+    warnings: string[];
+  },
+): Promise<MarketNewsContext | undefined> {
+  try {
+    const context = await getMarketNewsContext({
+      earningsHorizon: input.earningsHorizon,
+      lookbackDays: input.lookbackDays,
+      newsLimit: input.newsLimit,
+      now: input.now,
+      provider: input.provider,
+      symbol,
+    });
+    if (!context && input.provider !== 'none') {
+      input.warnings.push(`${symbol}: news context skipped because no enabled provider/key was configured.`);
+    }
+    return context;
+  } catch (error) {
+    input.warnings.push(`${symbol}: news context unavailable: ${(error as Error).message}`);
+    return undefined;
+  }
+}
+
+async function buildReviewFundamentalsContext(
+  symbol: string,
+  input: {
+    now: Date;
+    provider: MarketContextProvider;
+    warnings: string[];
+  },
+): Promise<MarketFundamentalsContext | undefined> {
+  try {
+    const context = await getMarketFundamentalsContext({
+      now: input.now,
+      provider: input.provider,
+      symbol,
+    });
+    if (!context && input.provider !== 'none') {
+      input.warnings.push(`${symbol}: fundamentals context skipped because no enabled provider/key was configured.`);
+    }
+    return context;
+  } catch (error) {
+    input.warnings.push(`${symbol}: fundamentals context unavailable: ${(error as Error).message}`);
+    return undefined;
+  }
+}
+
 function buildEntryValue(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): number | undefined {
   if (strategy.entryCost !== undefined) return strategy.entryCost;
   if (strategy.entryProceeds !== undefined) return -strategy.entryProceeds;
@@ -742,6 +1184,164 @@ function expectedValueEstimate(
     estimatedExpectedValuePercentOfMaxRisk: percent(estimatedExpectedValue, entryMaxRisk),
     notes,
   };
+}
+
+function reviewSymbol(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): string | undefined {
+  return strategy.symbol?.trim().split(':')[0]?.split('/')[0]?.toUpperCase();
+}
+
+function stockInstrumentScore(stock: { SummaryType?: string; Symbol?: string }, keyword: string): number {
+  const symbol = reviewDisplaySymbol(stock.Symbol ?? '');
+  return (
+    (stock.SummaryType === 'Instrument' ? 100 : 0) +
+    (symbol === keyword ? 60 : 0) +
+    (symbol.startsWith(keyword) ? 10 : 0)
+  );
+}
+
+function reviewDisplaySymbol(symbol: string): string {
+  return symbol.trim().split(':')[0]?.split('/')[0]?.toUpperCase() ?? symbol.trim().toUpperCase();
+}
+
+function toOhlcBar(bar: ChartBar): OhlcBar | undefined {
+  const close = priceFromFields(bar.CloseMid, bar.Close, bar.CloseBid, bar.CloseAsk);
+  if (close === undefined || close <= 0) {
+    return undefined;
+  }
+  return {
+    close,
+    high: priceFromFields(bar.HighMid, bar.High, bar.HighBid, bar.HighAsk),
+    low: priceFromFields(bar.LowMid, bar.Low, bar.LowBid, bar.LowAsk),
+  };
+}
+
+function analyzeTechnicalContext(
+  bars: OhlcBar[],
+  options: { symbol: string; horizon: number; requestedBars: number },
+): TechnicalReviewContext | undefined {
+  if (bars.length < 20) {
+    return undefined;
+  }
+  const closes = bars.map(bar => bar.close);
+  const lastClose = closes.at(-1);
+  const sma20 = average(closes.slice(-20));
+  const sma50 = closes.length >= 50 ? average(closes.slice(-50)) : undefined;
+  const return5dPercent = percentReturn(closes, 5);
+  const return20dPercent = percentReturn(closes, 20);
+  const distanceToSma20Percent = lastClose && sma20 ? (lastClose - sma20) / sma20 * 100 : undefined;
+  const distanceToSma50Percent = lastClose && sma50 ? (lastClose - sma50) / sma50 * 100 : undefined;
+  const annualizedVolatilityPercent = realizedVolatility(closes);
+  const averageRange14dPercent = averageRangePercent(bars.slice(-14));
+  const bias = inferTechnicalBias({ distanceToSma20Percent, distanceToSma50Percent, return20dPercent, sma20, sma50 });
+  return {
+    source: 'saxo_chart',
+    horizon: options.horizon,
+    bars: bars.length,
+    bias,
+    summary: [
+      `${options.symbol} Saxo chart bias is ${bias}.`,
+      formatMetric('20d return', return20dPercent, '%'),
+      formatMetric('distance to SMA20', distanceToSma20Percent, '%'),
+      formatMetric('realized volatility', annualizedVolatilityPercent, '% annualized'),
+    ].filter((item): item is string => Boolean(item)).join(' '),
+    riskNotes: technicalRiskNotes({ annualizedVolatilityPercent, averageRange14dPercent, return5dPercent, return20dPercent, bias }),
+    metrics: {
+      lastClose: roundMoney(lastClose),
+      return5dPercent: roundMoney(return5dPercent),
+      return20dPercent: roundMoney(return20dPercent),
+      sma20: roundMoney(sma20),
+      sma50: roundMoney(sma50),
+      distanceToSma20Percent: roundMoney(distanceToSma20Percent),
+      distanceToSma50Percent: roundMoney(distanceToSma50Percent),
+      annualizedVolatilityPercent: roundMoney(annualizedVolatilityPercent),
+      averageRange14dPercent: roundMoney(averageRange14dPercent),
+    },
+  };
+}
+
+function inferTechnicalBias(input: {
+  distanceToSma20Percent?: number;
+  distanceToSma50Percent?: number;
+  return20dPercent?: number;
+  sma20?: number;
+  sma50?: number;
+}): 'bullish' | 'bearish' | 'neutral' {
+  const aboveTrend =
+    (input.distanceToSma20Percent ?? 0) > 1 &&
+    (input.distanceToSma50Percent ?? 0) > 1 &&
+    (input.return20dPercent ?? 0) > 2 &&
+    (!input.sma20 || !input.sma50 || input.sma20 >= input.sma50 * 0.995);
+  if (aboveTrend) return 'bullish';
+  const belowTrend =
+    (input.distanceToSma20Percent ?? 0) < -1 &&
+    (input.distanceToSma50Percent ?? 0) < -1 &&
+    (input.return20dPercent ?? 0) < -2 &&
+    (!input.sma20 || !input.sma50 || input.sma20 <= input.sma50 * 1.005);
+  if (belowTrend) return 'bearish';
+  return 'neutral';
+}
+
+function technicalRiskNotes(input: {
+  annualizedVolatilityPercent?: number;
+  averageRange14dPercent?: number;
+  bias: 'bullish' | 'bearish' | 'neutral';
+  return5dPercent?: number;
+  return20dPercent?: number;
+}): string[] {
+  const notes: string[] = [];
+  if ((input.annualizedVolatilityPercent ?? 0) >= 75) {
+    notes.push('High realized volatility; review sizing and stop discipline.');
+  }
+  if ((input.averageRange14dPercent ?? 0) >= 5) {
+    notes.push('Wide recent daily ranges; use limit orders and avoid oversizing additions.');
+  }
+  if (Math.abs(input.return5dPercent ?? 0) >= 10) {
+    notes.push('Large 5-day move; watch reversal and gap risk.');
+  }
+  if (input.bias !== 'neutral' && Math.abs(input.return20dPercent ?? 0) >= 20) {
+    notes.push('Extended 20-day move; thesis may be crowded or late.');
+  }
+  return notes;
+}
+
+function percentReturn(values: number[], lookback: number): number | undefined {
+  const last = values.at(-1);
+  const previous = values.at(-(lookback + 1));
+  if (!last || !previous) return undefined;
+  return (last - previous) / previous * 100;
+}
+
+function realizedVolatility(values: number[]): number | undefined {
+  const returns: number[] = [];
+  for (let index = 1; index < values.length; index += 1) {
+    const previous = values[index - 1];
+    const current = values[index];
+    if (previous && current) returns.push(Math.log(current / previous));
+  }
+  if (returns.length < 2) return undefined;
+  const mean = average(returns);
+  const variance = returns.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (returns.length - 1);
+  return Math.sqrt(variance) * Math.sqrt(252) * 100;
+}
+
+function averageRangePercent(bars: OhlcBar[]): number | undefined {
+  const ranges = bars
+    .map(bar => (bar.high !== undefined && bar.low !== undefined ? (bar.high - bar.low) / bar.close * 100 : undefined))
+    .filter((value): value is number => value !== undefined);
+  return ranges.length ? average(ranges) : undefined;
+}
+
+function average(values: number[]): number {
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function formatMetric(label: string, value: number | undefined, suffix: string): string | undefined {
+  if (value === undefined) return undefined;
+  return `${label} ${roundMoney(value)}${suffix}.`;
+}
+
+function priceFromFields(...values: Array<number | undefined>): number | undefined {
+  return values.find(value => typeof value === 'number' && Number.isFinite(value) && value > 0);
 }
 
 function strategyMultiplier(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): number {
@@ -865,6 +1465,16 @@ function mid(bid: number | undefined, ask: number | undefined): number | undefin
 function percent(value: number | undefined, base: number | undefined): number | undefined {
   if (value === undefined || base === undefined || base <= 0) return undefined;
   return roundMoney(Math.abs(value) / base * 100);
+}
+
+function maxDefined(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined && Number.isFinite(value));
+  return defined.length ? Math.max(...defined) : undefined;
+}
+
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.trunc(value)));
 }
 
 function roundMoney(value: number | undefined): number | undefined {
