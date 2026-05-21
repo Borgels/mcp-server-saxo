@@ -6,3 +6,16 @@ coverage
 !.env.example
 *.log
 .DS_Store
+
+# MCPB / DXT bundles built locally
+*.mcpb
+*.dxt
+
+# npm pack output
+*.tgz
+
+# Local live-trading / strategy-run artefacts
+policy.live*.json
+live-*.json
+strategy-snapshot*.json
+saxo-audit*.jsonl

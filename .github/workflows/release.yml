@@ -1,0 +1,165 @@
+name: Release
+
+# Push a tag like `v0.1.1` (or `v0.1.1-rc.1` for a pre-release) to
+# trigger this. Publishes the package to npm as @borgels/mcp-server-saxo
+# and creates a GitHub Release with the .mcpb bundle attached.
+#
+# Authentication:
+#   Primary: npm Trusted Publishers via GitHub Actions OIDC. Configure
+#     once on npmjs.com → package settings → Trusted publishing → add
+#     this repo + this workflow file (release.yml). Then no secret is
+#     needed; `npm publish` auto-detects the OIDC token.
+#   Bootstrap: until trusted publishing is configured (which requires
+#     the package to already exist on npm), set the `NPM_TOKEN` repo
+#     secret to a one-time automation token. After the first publish
+#     and trusted-publisher setup, revoke the token and delete the
+#     secret.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  # `id-token: write` is required for OIDC trusted publishing.
+  # `contents: write` is required to create the GitHub Release.
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://registry.npmjs.org/'
+
+      - run: npm ci
+
+      - name: Verify tag matches package.json
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          # Strip any pre-release suffix (e.g. -rc.1) for the match
+          BASE_TAG_VERSION="${TAG_VERSION%%-*}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ] && [ "$PKG_VERSION" != "$BASE_TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION / $BASE_TAG_VERSION)"
+            exit 1
+          fi
+
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      - name: Validate MCPB manifest
+        run: npx mcpb validate manifest.json
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" '
+            $0 ~ "^## \\[" ver "\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG entry for $VERSION; using a placeholder." > release-notes.md
+            echo "" >> release-notes.md
+            echo "See [CHANGELOG.md](CHANGELOG.md) for details." >> release-notes.md
+          fi
+
+      - name: Determine release type
+        id: rel
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=next" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Publish to npm BEFORE rebuilding node_modules — `prepack`
+      # runs typecheck + test + build, which need devDependencies.
+      # Trusted publishing requires npm CLI 11.5.1+ and automatically
+      # records provenance for public packages, so run publish through
+      # that CLI without self-upgrading the runner's bundled npm.
+      #
+      # Auth path:
+      # - If NPM_TOKEN secret is set, use it (bootstrap / token mode).
+      # - Otherwise, rewrite .npmrc to drop the _authToken line so npm
+      #   doesn't try a literal empty token and instead falls through
+      #   to OIDC trusted publishing. setup-node@v6 with registry-url
+      #   writes `_authToken=${NODE_AUTH_TOKEN}` unconditionally;
+      #   leaving NODE_AUTH_TOKEN unset / empty makes npm publish fail
+      #   fast with 401 in ~7s before OIDC ever runs.
+      - name: Configure npm auth
+        # setup-node@v6 with `registry-url` writes its .npmrc to
+        # $RUNNER_TEMP/.npmrc and sets NPM_CONFIG_USERCONFIG to point
+        # there — so any override has to target that exact file, not
+        # the default ~/.npmrc.
+        run: |
+          NPMRC_PATH="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          echo "Overwriting npmrc at: $NPMRC_PATH"
+          if [ -n "${NPM_TOKEN}" ]; then
+            echo "Using NPM_TOKEN secret for publish"
+            cat > "$NPMRC_PATH" <<EOF
+          registry=https://registry.npmjs.org/
+          //registry.npmjs.org/:_authToken=${NPM_TOKEN}
+          EOF
+          else
+            echo "No NPM_TOKEN secret — relying on OIDC trusted publishing"
+            cat > "$NPMRC_PATH" <<EOF
+          registry=https://registry.npmjs.org/
+          EOF
+          fi
+          echo "--- npmrc contents (token redacted) ---"
+          sed 's/_authToken=.*/_authToken=<REDACTED>/' "$NPMRC_PATH"
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Diagnostic — OIDC + npm state
+        run: |
+          echo "::group::env vars"
+          echo "NPM_CONFIG_USERCONFIG=${NPM_CONFIG_USERCONFIG:-<unset>}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL present: $([ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && echo yes || echo no)"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN present: $([ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] && echo yes || echo no)"
+          echo "::endgroup::"
+          echo "::group::npmrc (redacted)"
+          NPMRC_PATH="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$NPMRC_PATH" ]; then
+            sed 's/_authToken=.*/_authToken=<REDACTED>/' "$NPMRC_PATH"
+          else
+            echo "(no npmrc at $NPMRC_PATH)"
+          fi
+          echo "::endgroup::"
+          echo "::group::npm + node versions"
+          node --version
+          npm --version
+          echo "::endgroup::"
+
+      - name: Publish to npm
+        run: npx -y npm@^11.5.1 publish --access public --tag "${{ steps.rel.outputs.npm_tag }}" --loglevel verbose
+
+      # Reinstall with --omit=dev so the .mcpb only includes runtime
+      # deps. mcpb is no longer in node_modules; pull a fresh copy via
+      # npx -p so the bundle's own node_modules stays clean.
+      - name: Pack MCPB bundle (with prod-only deps)
+        run: |
+          rm -rf node_modules
+          npm ci --omit=dev
+          npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb pack . "mcp-server-saxo-${GITHUB_REF_NAME}.mcpb"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body_path: release-notes.md
+          prerelease: ${{ steps.rel.outputs.prerelease }}
+          files: |
+            mcp-server-saxo-${{ github.ref_name }}.mcpb

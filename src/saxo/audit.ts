@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { appendFile } from 'node:fs/promises';
 import { formatUnknownError } from '../errors.js';
+import { readEnv } from './env.js';
 import type { SaxoEnvironment } from './environment.js';
 
 export interface SaxoAuditEvent {
@@ -17,7 +18,7 @@ export interface SaxoAuditEvent {
 }
 
 export async function writeAuditEvent(event: SaxoAuditEvent): Promise<void> {
-  const auditPath = process.env.SAXO_AUDIT_LOG;
+  const auditPath = readEnv('SAXO_AUDIT_LOG');
   if (!auditPath) {
     return;
   }

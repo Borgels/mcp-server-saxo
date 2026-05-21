@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { SaxoPolicyDeniedError } from '../errors.js';
+import { readBoolEnv, readEnv } from './env.js';
 import type { SaxoEnvironment } from './environment.js';
 
 const READ_ONLY_TOOLS = new Set([
@@ -9,13 +10,28 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_search_instruments',
   'saxo_get_instrument_details',
   'saxo_list_exchanges',
+  'saxo_get_option_chain',
+  'saxo_list_option_expiries',
+  'saxo_list_standard_option_expiries',
+  'saxo_find_option_leg',
   'saxo_get_infoprice',
   'saxo_get_infoprices_list',
   'saxo_get_chart',
+  'saxo_feature_availability',
+  'saxo_screen_market',
+  'saxo_compute_spread_quote',
+  'saxo_estimate_vertical_spread',
+  'saxo_plan_option_strategy',
+  'saxo_screen_option_strategies',
+  'saxo_screen_stock_strategies',
+  'saxo_plan_portfolio_strategy',
+  'saxo_review_strategy_positions',
   'saxo_list_accounts',
   'saxo_get_balance',
   'saxo_list_positions',
+  'saxo_list_net_positions',
   'saxo_list_closed_positions',
+  'saxo_list_activities',
   'saxo_list_orders',
   'saxo_get_order',
 ]);
@@ -25,9 +41,14 @@ const WRITE_TOOLS = new Set([
   'saxo_place_order',
   'saxo_modify_order',
   'saxo_cancel_order',
+  'saxo_precheck_multileg_order',
+  'saxo_place_multileg_order',
+  'saxo_modify_multileg_order',
+  'saxo_cancel_multileg_order',
 ]);
 
 const OAUTH_TOOLS = new Set([
+  'saxo_oauth_login',
   'saxo_oauth_start',
   'saxo_oauth_complete',
   'saxo_oauth_cancel',
@@ -36,6 +57,7 @@ const OAUTH_TOOLS = new Set([
 export interface SaxoPolicy {
   allow_live_writes: boolean;
   require_precheck_on_live: boolean;
+  allow_short_option_legs?: boolean;
   allowed_asset_types?: string[];
   allowed_account_keys?: string[];
   denied_uics?: number[];
@@ -50,7 +72,7 @@ export const DEFAULT_POLICY: SaxoPolicy = {
 
 let cachedPolicy: SaxoPolicy | undefined;
 
-export function loadPolicy(path: string | undefined = process.env.SAXO_POLICY_PATH): SaxoPolicy {
+export function loadPolicy(path: string | undefined = readEnv('SAXO_POLICY_PATH')): SaxoPolicy {
   if (!path) {
     return DEFAULT_POLICY;
   }
@@ -98,6 +120,7 @@ export interface OrderPolicyInput {
   AssetType?: string;
   Amount?: number;
   BuySell?: 'Buy' | 'Sell';
+  ToOpenClose?: 'ToOpen' | 'ToClose';
   OrderType?: string;
   OrderPrice?: number;
   StopPrice?: number;
@@ -180,12 +203,31 @@ export function checkOrder(input: OrderPolicyInput, policy: SaxoPolicy): void {
 
   if (typeof policy.max_notional === 'number' && typeof input.Amount === 'number') {
     const price = input.OrderPrice ?? input.StopPrice;
-    if (typeof price === 'number' && input.Amount * price > policy.max_notional) {
-      throw new SaxoPolicyDeniedError(
-        'saxo_place_order',
-        `Notional ${input.Amount * price} exceeds policy max_notional (${policy.max_notional}).`,
-      );
+    if (typeof price === 'number') {
+      const multiplier = contractMultiplier(input.AssetType);
+      const notional = input.Amount * price * multiplier;
+      if (notional > policy.max_notional) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_order',
+          `Notional ${notional} (Amount × OrderPrice × multiplier ${multiplier}) exceeds policy max_notional (${policy.max_notional}).`,
+        );
+      }
     }
+  }
+}
+
+export function contractMultiplier(assetType: string | undefined): number {
+  if (!assetType) {
+    return 1;
+  }
+  switch (assetType) {
+    case 'StockOption':
+    case 'IndexOption':
+    case 'StockIndexOption':
+    case 'FuturesOption':
+      return 100;
+    default:
+      return 1;
   }
 }
 
@@ -200,6 +242,115 @@ function resolveAmountLimit(
   return typeof limits.default === 'number' ? limits.default : undefined;
 }
 
+export interface MultiLegPolicyLeg {
+  Uic?: number;
+  AssetType?: string;
+  Amount?: number;
+  BuySell?: 'Buy' | 'Sell';
+  ToOpenClose?: 'ToOpen' | 'ToClose';
+}
+
+export interface MultiLegPolicyInput {
+  AccountKey?: string;
+  OrderPrice?: number;
+  Legs: MultiLegPolicyLeg[];
+}
+
+export function checkMultiLegOrder(input: MultiLegPolicyInput, policy: SaxoPolicy): void {
+  if (input.AccountKey && policy.allowed_account_keys?.length) {
+    if (!policy.allowed_account_keys.includes(input.AccountKey)) {
+      throw new SaxoPolicyDeniedError(
+        'saxo_place_multileg_order',
+        `AccountKey ${input.AccountKey} is not in policy.allowed_account_keys.`,
+      );
+    }
+  }
+
+  let maxLegAmount = 0;
+  for (let i = 0; i < input.Legs.length; i += 1) {
+    const leg = input.Legs[i];
+    if (!leg) {
+      continue;
+    }
+
+    if (leg.AssetType && policy.allowed_asset_types?.length) {
+      if (!policy.allowed_asset_types.includes(leg.AssetType)) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_multileg_order',
+          `Leg ${i} AssetType ${leg.AssetType} is not in policy.allowed_asset_types.`,
+        );
+      }
+    }
+
+    if (
+      policy.allow_short_option_legs === false &&
+      isOptionAssetType(leg.AssetType) &&
+      leg.BuySell === 'Sell' &&
+      leg.ToOpenClose !== 'ToClose'
+    ) {
+      throw new SaxoPolicyDeniedError(
+        'saxo_place_multileg_order',
+        `Leg ${i} opens a short ${leg.AssetType} position, but policy.allow_short_option_legs=false.`,
+      );
+    }
+
+    if (leg.Uic !== undefined && policy.denied_uics?.length) {
+      if (policy.denied_uics.includes(leg.Uic)) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_multileg_order',
+          `Leg ${i} Uic ${leg.Uic} is in policy.denied_uics.`,
+        );
+      }
+    }
+
+    if (typeof leg.Amount === 'number' && policy.max_order_amount) {
+      const limit = resolveAmountLimit(leg.AssetType, policy.max_order_amount);
+      if (limit !== undefined && leg.Amount > limit) {
+        throw new SaxoPolicyDeniedError(
+          'saxo_place_multileg_order',
+          `Leg ${i} Amount ${leg.Amount} exceeds policy max_order_amount (${limit}) for ${leg.AssetType ?? 'default'}.`,
+        );
+      }
+    }
+
+    if (typeof leg.Amount === 'number' && leg.Amount > maxLegAmount) {
+      maxLegAmount = leg.Amount;
+    }
+  }
+
+  if (typeof policy.max_notional === 'number' && typeof input.OrderPrice === 'number' && maxLegAmount > 0) {
+    // OrderPrice is the per-contract net debit/credit. True notional risk is
+    // OrderPrice * largestLegAmount * contractMultiplier (100 for US equity
+    // options). We use the largest leg's AssetType for the multiplier; if
+    // unset we fall back to the option default of 100 to err toward blocking
+    // oversized trades rather than letting them through.
+    const largestLeg = input.Legs.reduce<MultiLegPolicyLeg | undefined>((best, leg) => {
+      if (typeof leg.Amount !== 'number') {
+        return best;
+      }
+      if (!best || (typeof best.Amount === 'number' && leg.Amount > best.Amount)) {
+        return leg;
+      }
+      return best;
+    }, undefined);
+    const multiplier = contractMultiplier(largestLeg?.AssetType ?? 'StockOption');
+    const notional = Math.abs(input.OrderPrice) * maxLegAmount * multiplier;
+    if (notional > policy.max_notional) {
+      throw new SaxoPolicyDeniedError(
+        'saxo_place_multileg_order',
+        `Notional ${notional} (|OrderPrice| × largest leg Amount × multiplier ${multiplier}) exceeds policy max_notional (${policy.max_notional}).`,
+      );
+    }
+  }
+}
+
+function isOptionAssetType(assetType: string | undefined): boolean {
+  return assetType === 'StockOption' ||
+    assetType === 'IndexOption' ||
+    assetType === 'StockIndexOption' ||
+    assetType === 'FuturesOption';
+}
+
 export function isLiveTradingEnabled(): boolean {
-  return (process.env.SAXO_ENABLE_LIVE_TRADING ?? 'false').trim().toLowerCase() === 'true';
+  return readBoolEnv('SAXO_ENABLE_LIVE_TRADING', false);
 }

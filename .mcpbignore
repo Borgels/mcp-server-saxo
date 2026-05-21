@@ -1,0 +1,58 @@
+# Source / dev artifacts
+src
+test
+.github
+.claude
+.vscode
+.idea
+tsconfig.json
+tsup.config.*
+vitest.config.*
+.eslintrc*
+.prettierrc*
+
+# Logs / OS noise
+*.log
+.DS_Store
+Thumbs.db
+
+# Local-only files
+.env
+.env.*
+!.env.example
+*.tgz
+*.mcpb
+*.dxt
+oauth-*.log
+policy.live*.json
+live-*.json
+strategy-snapshot*.json
+saxo-audit*.jsonl
+
+# Dev dependencies — listed in package.json devDependencies. mcpb does
+# not prune by default. The release workflow runs `npm ci --omit=dev`
+# before `mcpb pack` so node_modules only contains runtime deps; this
+# block defensively excludes dev deps in case the bundle is built from
+# a regular dev install.
+node_modules/@anthropic-ai/mcpb
+node_modules/@types
+node_modules/tsup
+node_modules/tsx
+node_modules/typescript
+node_modules/vite
+node_modules/vitest
+node_modules/@vitest
+node_modules/esbuild
+node_modules/@esbuild
+node_modules/rollup
+node_modules/@rollup
+node_modules/source-map*
+node_modules/postcss
+node_modules/postcss-*
+node_modules/@types
+node_modules/.bin
+node_modules/.cache
+node_modules/.package-lock.json
+
+# Avoid shipping the worktree / git plumbing inside dist
+.git

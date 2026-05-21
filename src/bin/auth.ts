@@ -1,10 +1,10 @@
 #!/usr/bin/env node
-import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { upsertEnvFile } from '../saxo/env-file.js';
 import {
   completeOauthFlow,
   loadOauthConfigFromEnv,
+  openBrowser,
   startOauthFlow,
 } from '../saxo/oauth.js';
 import { resolveEnvironment, type SaxoEnvironment } from '../saxo/environment.js';
@@ -99,19 +99,14 @@ function printHelp(): void {
 
 Environment variables required:
   SAXO_APP_KEY
-  SAXO_APP_SECRET
-  SAXO_REDIRECT_URI (default http://127.0.0.1:8765/callback)
+  SAXO_APP_SECRET (required for Code-grant apps; omit for PKCE-grant apps)
+  SAXO_REDIRECT_URI (default http://localhost:8765/callback). The exact value
+    must be registered in the Saxo app. Saxo's authorize endpoint rejects IP-
+    literal redirects, so use a hostname (localhost), not 127.0.0.1.
+    For PKCE-grant apps the registered URL in the portal must OMIT the port
+    (e.g. http://localhost/callback); the URL sent by this CLI keeps the
+    port and Saxo matches port-blind.
 `);
-}
-
-function openBrowser(url: string): void {
-  const command =
-    process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
-  try {
-    spawn(command, [url], { stdio: 'ignore', detached: true }).unref();
-  } catch {
-    // ignore — user can copy/paste the URL printed earlier.
-  }
 }
 
 main().catch(error => {

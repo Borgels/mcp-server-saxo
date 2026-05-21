@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
+import { spawn } from 'node:child_process';
 import { exchangeCodeForTokens, type SaxoTokenSet } from './auth.js';
+import { readEnv } from './env.js';
 import {
   getEnvironmentEndpoints,
   resolveEnvironment,
@@ -10,7 +12,8 @@ import {
 export interface OauthFlowConfig {
   environment: SaxoEnvironment;
   appKey: string;
-  appSecret: string;
+  /** Required for Saxo "Code" grant apps; omitted for "PKCE" grant apps. */
+  appSecret?: string;
   redirectUri: string;
   fetchImpl?: typeof fetch;
 }
@@ -21,7 +24,7 @@ export interface PendingOauthFlow {
   redirectUri: string;
   environment: SaxoEnvironment;
   appKey: string;
-  appSecret: string;
+  appSecret?: string;
   verifier: string;
   expectedState: string;
   createdAt: number;
@@ -35,15 +38,20 @@ export interface PendingOauthFlow {
 const flows = new Map<string, PendingOauthFlow>();
 
 export function loadOauthConfigFromEnv(environment?: SaxoEnvironment | string): OauthFlowConfig {
-  const env = resolveEnvironment(environment !== undefined ? String(environment) : process.env.SAXO_ENVIRONMENT);
-  const appKey = process.env.SAXO_APP_KEY;
-  const appSecret = process.env.SAXO_APP_SECRET;
-  if (!appKey || !appSecret) {
-    throw new Error(
-      'OAuth requires SAXO_APP_KEY and SAXO_APP_SECRET in the MCP server environment.',
-    );
+  const env = resolveEnvironment(environment !== undefined ? String(environment) : readEnv('SAXO_ENVIRONMENT'));
+  const appKey = readEnv('SAXO_APP_KEY');
+  const appSecret = readEnv('SAXO_APP_SECRET');
+  if (!appKey) {
+    throw new Error('OAuth requires SAXO_APP_KEY in the MCP server environment.');
   }
-  const redirectUri = process.env.SAXO_REDIRECT_URI ?? 'http://127.0.0.1:8765/callback';
+  // SAXO_APP_SECRET is optional: confidential ("Code" grant) apps have
+  // one; public ("PKCE" grant) apps don't. The flow detects the
+  // difference and adjusts the token request accordingly.
+  // Saxo's authorize endpoint rejects IP-literal redirects with
+  // "Invalid value of redirect_uri parameter. It must be an absolute uri",
+  // so the default uses the localhost hostname. The registered URL in the
+  // Saxo app config must match exactly.
+  const redirectUri = readEnv('SAXO_REDIRECT_URI') ?? 'http://localhost:8765/callback';
   return { environment: env, appKey, appSecret, redirectUri };
 }
 
@@ -206,6 +214,25 @@ export function cancelOauthFlow(ticketId: string): boolean {
 
 export function getPendingTicketIds(): string[] {
   return Array.from(flows.keys());
+}
+
+export function openBrowser(url: string): boolean {
+  // On Windows `start` is a cmd builtin, not an executable, so go through
+  // the URL handler. Avoid `cmd /c start`: OAuth URLs contain `&`, which cmd
+  // treats as command separators unless quoting is exactly right.
+  const isWindows = process.platform === 'win32';
+  const command = isWindows ? 'rundll32.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = isWindows ? ['url.dll,FileProtocolHandler', url] : [url];
+  try {
+    const child = spawn(command, args, { stdio: 'ignore', detached: true });
+    child.on('error', () => {
+      // ignore - caller still has the authorize URL for manual fallback.
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function base64UrlEncode(buffer: Buffer): string {

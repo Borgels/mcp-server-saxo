@@ -69,4 +69,13 @@ const httpServer = createNodeServer(async (req, res) => {
 
 httpServer.listen(config.port, config.host, () => {
   console.error(`Saxo MCP HTTP server listening on http://${config.host}:${config.port}/mcp`);
+  if (!config.httpToken) {
+    console.error(
+      'WARNING: MCP_HTTP_TOKEN is not set — any process that can reach this host:port can invoke Saxo write tools. ' +
+        'Set MCP_HTTP_TOKEN to require a bearer token, especially if SAXO_ENABLE_LIVE_TRADING=true.',
+    );
+  }
+  if (process.env.MCP_ALLOW_ANY_ORIGIN === 'true') {
+    console.error('WARNING: MCP_ALLOW_ANY_ORIGIN=true — CORS is wide open.');
+  }
 });

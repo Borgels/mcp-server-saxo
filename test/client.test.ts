@@ -93,6 +93,37 @@ describe('SaxoClient', () => {
     }
   });
 
+  it('surfaces nested Saxo ErrorInfo payloads via SaxoHttpError', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(
+        {
+          ErrorInfo: {
+            ErrorCode: 'OtherError',
+            Message: 'Your option trading profile does not allow shorting options.',
+          },
+          Orders: [
+            {
+              ErrorInfo: {
+                ErrorCode: 'OtherError',
+                Message: 'Your option trading profile does not allow shorting options.',
+              },
+            },
+          ],
+        },
+        400,
+      ),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(client.post('/trade/v2/orders/multileg', {})).rejects.toThrow(
+      /option trading profile does not allow shorting options/,
+    );
+  });
+
   it('exposes retry-after on 429', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       jsonResponse(
@@ -174,6 +205,76 @@ describe('SaxoClient', () => {
     expect(init?.method).toBe('POST');
     expect(init?.body).toBe('{"AccountKey":"k","Uic":211}');
     expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+  });
+
+  it('places multi-leg orders against /trade/v2/orders/multileg with the documented body', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({ MultiLegOrderId: '88608648', Orders: [{ OrderId: '88608649' }, { OrderId: '88608650' }] }),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const { placeMultiLegOrder } = await import('../src/saxo/trading.js');
+
+    const result = await placeMultiLegOrder(client, {
+      AccountKey: 'zlE1Jm-x97p5WwV7-wOGkA==',
+      OrderType: 'Limit',
+      OrderPrice: 1.08,
+      OrderDuration: { DurationType: 'GoodTillCancel' },
+      ManualOrder: true,
+      ExternalReference: 'nok-bull-call-spread-1',
+      Legs: [
+        { Uic: 14853018, AssetType: 'StockOption', BuySell: 'Buy', Amount: 150, ToOpenClose: 'ToOpen' },
+        { Uic: 14853056, AssetType: 'StockOption', BuySell: 'Sell', Amount: 150, ToOpenClose: 'ToOpen' },
+      ],
+    });
+
+    expect(result).toEqual({
+      MultiLegOrderId: '88608648',
+      Orders: [{ OrderId: '88608649' }, { OrderId: '88608650' }],
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe('https://gateway.saxobank.com/sim/openapi/trade/v2/orders/multileg');
+    expect(init?.method).toBe('POST');
+    const body = JSON.parse(init?.body as string) as Record<string, unknown>;
+    expect(body).toMatchObject({
+      AccountKey: 'zlE1Jm-x97p5WwV7-wOGkA==',
+      OrderType: 'Limit',
+      OrderPrice: 1.08,
+      OrderDuration: { DurationType: 'GoodTillCancel' },
+      ManualOrder: true,
+      ExternalReference: 'nok-bull-call-spread-1',
+    });
+    expect((body.Legs as unknown[]).length).toBe(2);
+    expect((body.Legs as unknown[])[0]).toEqual({
+      Uic: 14853018,
+      AssetType: 'StockOption',
+      BuySell: 'Buy',
+      Amount: 150,
+      ToOpenClose: 'ToOpen',
+    });
+  });
+
+  it('cancels multi-leg orders via DELETE with AccountKey query', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({}));
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const { cancelMultiLegOrder } = await import('../src/saxo/trading.js');
+
+    await cancelMultiLegOrder(client, {
+      multiLegOrderId: '88608648',
+      accountKey: 'AK',
+    });
+
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toBe('https://gateway.saxobank.com/sim/openapi/trade/v2/orders/multileg/88608648?AccountKey=AK');
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('DELETE');
   });
 
   it('redacts tokens and secrets from error formatting', () => {
