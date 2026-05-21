@@ -24,6 +24,9 @@ Thumbs.db
 *.mcpb
 *.dxt
 oauth-*.log
+policy.live*.json
+live-*.json
+saxo-audit*.jsonl
 
 # Dev dependencies — listed in package.json devDependencies. mcpb does
 # not prune by default. The release workflow runs `npm ci --omit=dev`
