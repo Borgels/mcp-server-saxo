@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-05-21
+
+### Fixed
+
+- `saxo_review_strategy_positions` no longer requires a strategy snapshot file
+  to be useful in MCPB installs. If no `strategyPositions` or readable snapshot
+  is supplied, it now infers standalone unmanaged review entries from Saxo open
+  positions and warns that thesis, leg grouping, entry rules, max risk, and max
+  profit are unavailable.
+- A missing `SAXO_STRATEGY_SNAPSHOT_PATH` from MCPB/user config is treated as a
+  warning and ignored instead of failing the review tool. Explicit
+  `strategySnapshotPath` inputs still fail fast when the requested file cannot
+  be read.
+- Optional `ALPHA_VANTAGE_API_KEY` MCPB placeholders are treated as unset.
+
+### Changed
+
+- The MCPB manifest exposes optional `SAXO_STRATEGY_SNAPSHOT_PATH` so users who
+  do keep a local strategy JSON can configure it once in their MCP client.
+
 ## [0.2.0] - 2026-05-21
 
 Strategy-screening and portfolio-planning release. Strategy tools are

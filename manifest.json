@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "mcp-server-saxo",
   "display_name": "Saxo Bank OpenAPI",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
   "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, single-leg and multi-leg option orders, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
   "author": {
@@ -48,6 +48,7 @@
         "SAXO_REDIRECT_URI": "${user_config.SAXO_REDIRECT_URI}",
         "SAXO_TIMEOUT_MS": "${user_config.SAXO_TIMEOUT_MS}",
         "ALPHA_VANTAGE_API_KEY": "${user_config.ALPHA_VANTAGE_API_KEY}",
+        "SAXO_STRATEGY_SNAPSHOT_PATH": "${user_config.SAXO_STRATEGY_SNAPSHOT_PATH}",
         "SAXO_ENABLE_LIVE_TRADING": "${user_config.SAXO_ENABLE_LIVE_TRADING}",
         "SAXO_POLICY_PATH": "${user_config.SAXO_POLICY_PATH}",
         "SAXO_AUDIT_LOG": "${user_config.SAXO_AUDIT_LOG}"
@@ -118,6 +119,12 @@
       "description": "Optional. Enables Alpha Vantage OVERVIEW fundamentals plus NEWS_SENTIMENT and EARNINGS_CALENDAR when strategy tools opt into that enrichment. Leave blank to keep screening Saxo-only.",
       "required": false,
       "sensitive": true
+    },
+    "SAXO_STRATEGY_SNAPSHOT_PATH": {
+      "type": "file",
+      "title": "Strategy snapshot path",
+      "description": "Optional. JSON file used by saxo_review_strategy_positions when the tool call does not pass strategyPositions or strategySnapshotPath. Leave blank for account-status-only reviews or pass strategyPositions directly.",
+      "required": false
     },
     "SAXO_ENABLE_LIVE_TRADING": {
       "type": "boolean",

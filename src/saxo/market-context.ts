@@ -138,12 +138,13 @@ interface AlphaOverviewResponse {
 }
 
 export async function getMarketNewsContext(input: MarketContextInput): Promise<MarketNewsContext | undefined> {
-  const provider = resolveProvider(input.provider, input.alphaVantageApiKey ?? process.env.ALPHA_VANTAGE_API_KEY);
+  const configuredApiKey = input.alphaVantageApiKey ?? readEnv('ALPHA_VANTAGE_API_KEY');
+  const provider = resolveProvider(input.provider, configuredApiKey);
   if (provider === 'none') {
     return undefined;
   }
 
-  const apiKey = input.alphaVantageApiKey ?? process.env.ALPHA_VANTAGE_API_KEY;
+  const apiKey = configuredApiKey;
   if (!apiKey) {
     return undefined;
   }
@@ -216,12 +217,13 @@ export async function getMarketNewsContext(input: MarketContextInput): Promise<M
 export async function getMarketFundamentalsContext(
   input: MarketFundamentalsInput,
 ): Promise<MarketFundamentalsContext | undefined> {
-  const provider = resolveProvider(input.provider, input.alphaVantageApiKey ?? process.env.ALPHA_VANTAGE_API_KEY);
+  const configuredApiKey = input.alphaVantageApiKey ?? readEnv('ALPHA_VANTAGE_API_KEY');
+  const provider = resolveProvider(input.provider, configuredApiKey);
   if (provider === 'none') {
     return undefined;
   }
 
-  const apiKey = input.alphaVantageApiKey ?? process.env.ALPHA_VANTAGE_API_KEY;
+  const apiKey = configuredApiKey;
   if (!apiKey) {
     return undefined;
   }
@@ -729,3 +731,4 @@ function redactSensitiveText(text: string): string {
     .replace(/(api key (?:as|is)\s+)[A-Z0-9]{8,}/gi, '$1[REDACTED]')
     .replace(/(apikey=)[A-Z0-9]{8,}/gi, '$1[REDACTED]');
 }
+import { readEnv } from './env.js';

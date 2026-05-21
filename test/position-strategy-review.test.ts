@@ -215,6 +215,57 @@ describe('reviewStrategyPositions', () => {
     });
   });
 
+  it('infers unmanaged standalone reviews from Saxo positions when no strategy snapshot is supplied', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(client, {}, new Date('2026-01-01T00:00:00.000Z'));
+
+    expect(result.filters.strategiesProvided).toBe(3);
+    expect(result.warnings.join(' ')).toContain('Inferred 3 standalone strategy review entries');
+    expect(result.accountPositions).toMatchObject({
+      positionsFetched: 3,
+      matchedLegs: 3,
+      unmatchedLegs: 0,
+    });
+    expect(result.reviews.map(review => review.strategy)).toEqual([
+      'inferred_unmanaged_position',
+      'inferred_unmanaged_position',
+      'inferred_unmanaged_position',
+    ]);
+    expect(result.reviews[0]).toMatchObject({
+      symbol: 'AAA',
+      instrumentType: 'option',
+      openLegsMatched: 1,
+    });
+  });
+
+  it('ignores a missing env-configured strategy snapshot and falls back to inferred positions', async () => {
+    const previous = process.env.SAXO_STRATEGY_SNAPSHOT_PATH;
+    process.env.SAXO_STRATEGY_SNAPSHOT_PATH = join(tmpdir(), 'missing-saxo-strategy-snapshot.json');
+    try {
+      const client = new SaxoClient({
+        environment: 'sim',
+        accessToken: 'token',
+        fetchImpl: followUpFetchMock(),
+      });
+
+      const result = await reviewStrategyPositions(client, {}, new Date('2026-01-01T00:00:00.000Z'));
+
+      expect(result.filters.strategiesProvided).toBe(3);
+      expect(result.warnings.join(' ')).toContain('Ignoring configured SAXO_STRATEGY_SNAPSHOT_PATH');
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SAXO_STRATEGY_SNAPSHOT_PATH;
+      } else {
+        process.env.SAXO_STRATEGY_SNAPSHOT_PATH = previous;
+      }
+    }
+  });
+
   it('adds technical and liquidity context for stock strategy reviews', async () => {
     const client = new SaxoClient({
       environment: 'sim',
@@ -262,12 +313,23 @@ function followUpFetchMock(): typeof fetch {
     if (parsed.pathname.endsWith('/port/v1/users/me')) {
       return jsonResponse({ ClientKey: 'client-1' });
     }
-    if (parsed.pathname.endsWith('/port/v1/positions')) {
+    if (parsed.pathname.endsWith('/port/v1/positions') || parsed.pathname.endsWith('/port/v1/positions/me')) {
       return jsonResponse({
         Data: [
-          { PositionBase: { Uic: 101, Amount: 1, BuySell: 'Buy' }, PositionView: { UnderlyingCurrentPrice: 102 } },
-          { PositionBase: { Uic: 102, Amount: 1, BuySell: 'Sell' }, PositionView: { UnderlyingCurrentPrice: 102 } },
-          { PositionBase: { Uic: 201, Amount: 10, BuySell: 'Buy' } },
+          {
+            DisplayAndFormat: { Symbol: 'AAA:xnas' },
+            PositionBase: { Uic: 101, AssetType: 'StockOption', Amount: 1, BuySell: 'Buy' },
+            PositionView: { UnderlyingCurrentPrice: 102 },
+          },
+          {
+            DisplayAndFormat: { Symbol: 'AAA:xnas' },
+            PositionBase: { Uic: 102, AssetType: 'StockOption', Amount: 1, BuySell: 'Sell' },
+            PositionView: { UnderlyingCurrentPrice: 102 },
+          },
+          {
+            DisplayAndFormat: { Symbol: 'AAA:xnas' },
+            PositionBase: { Uic: 201, AssetType: 'Stock', Amount: 10, BuySell: 'Buy' },
+          },
         ],
       });
     }
@@ -280,7 +342,7 @@ function followUpFetchMock(): typeof fetch {
         MarginUtilizationPct: 0,
       });
     }
-    if (parsed.pathname.endsWith('/port/v1/orders')) {
+    if (parsed.pathname.endsWith('/port/v1/orders') || parsed.pathname.endsWith('/port/v1/orders/me')) {
       return jsonResponse({
         Data: [
           { OrderId: 'order-1', Status: 'Working' },

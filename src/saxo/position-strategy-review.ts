@@ -15,6 +15,7 @@ import { readEnv } from './env.js';
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
 export type StrategyInstrumentType = 'stock' | 'option' | 'mixed';
 export type StrategyReviewDepth = 'status' | 'standard' | 'deep';
+type StrategyPositionInput = NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
 
 export interface StrategyLegSnapshotInput {
   uic: number;
@@ -260,6 +261,7 @@ interface OhlcBar {
 interface StrategySnapshotFile {
   accountKey?: string;
   defaultRules?: StrategyFollowUpInput['defaultRules'];
+  sourcePath: string;
   strategyPositions?: NonNullable<StrategyFollowUpInput['strategyPositions']>;
 }
 
@@ -268,13 +270,16 @@ export async function reviewStrategyPositions(
   input: StrategyFollowUpInput,
   now: Date = new Date(),
 ): Promise<StrategyFollowUpResult> {
-  const snapshot = loadStrategySnapshot(input.strategySnapshotPath);
-  const strategies = input.strategyPositions?.length
+  const warnings: string[] = [];
+  const snapshot = loadStrategySnapshot(input.strategySnapshotPath, {
+    explicit: input.strategySnapshotPath !== undefined,
+    warnings,
+  });
+  let strategies = input.strategyPositions?.length
     ? input.strategyPositions
     : snapshot?.strategyPositions ?? [];
-  const warnings: string[] = [];
   if (!input.strategyPositions?.length && snapshot) {
-    warnings.push(`Loaded strategy snapshot from ${input.strategySnapshotPath ?? readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')}.`);
+    warnings.push(`Loaded strategy snapshot from ${snapshot.sourcePath}.`);
   }
   const accountKey = input.accountKey ?? snapshot?.accountKey;
   const defaultRules = { ...snapshot?.defaultRules, ...input.defaultRules };
@@ -296,6 +301,16 @@ export async function reviewStrategyPositions(
     }),
   ]);
   const positionRows = feedRows(positions);
+  if (!strategies.length && positionRows.length) {
+    strategies = inferStandaloneStrategiesFromPositions(positionRows);
+    warnings.push(
+      `Inferred ${strategies.length} standalone strategy review entries from Saxo open positions. ` +
+      'No saved strategy thesis, leg grouping, entry rules, max risk, or max profit were available, so multi-leg option spreads may appear as separate unmanaged positions.',
+    );
+  }
+  if (!strategies.length) {
+    warnings.push('No strategyPositions, readable strategy snapshot, or inferable open positions were provided; returning account status without named strategy verdicts.');
+  }
   const openAmountByUic = summarizeOpenAmounts(positionRows);
   const underlyingPriceByUic = summarizeUnderlyingPrices(positionRows);
   const priceByUic = await fetchStrategyPrices(client, strategies, accountKey, warnings);
@@ -357,7 +372,10 @@ function resolveReviewContextOptions(input: StrategyFollowUpInput): ReviewContex
   };
 }
 
-function loadStrategySnapshot(path = readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')): StrategySnapshotFile | undefined {
+function loadStrategySnapshot(
+  path = readEnv('SAXO_STRATEGY_SNAPSHOT_PATH'),
+  options: { explicit: boolean; warnings: string[] } = { explicit: false, warnings: [] },
+): StrategySnapshotFile | undefined {
   if (!path) {
     return undefined;
   }
@@ -365,10 +383,20 @@ function loadStrategySnapshot(path = readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')): St
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
   } catch (error) {
-    throw new Error(`Failed to read strategy snapshot ${path}: ${(error as Error).message}`);
+    const message = `Failed to read strategy snapshot ${path}: ${(error as Error).message}`;
+    if (options.explicit) {
+      throw new Error(message);
+    }
+    options.warnings.push(`${message}. Ignoring configured SAXO_STRATEGY_SNAPSHOT_PATH; pass strategyPositions or a valid strategySnapshotPath to review named strategies.`);
+    return undefined;
   }
   if (!isRecord(parsed)) {
-    throw new Error(`Strategy snapshot ${path} must contain a JSON object.`);
+    const message = `Strategy snapshot ${path} must contain a JSON object.`;
+    if (options.explicit) {
+      throw new Error(message);
+    }
+    options.warnings.push(`${message} Ignoring configured SAXO_STRATEGY_SNAPSHOT_PATH; pass strategyPositions or a valid strategySnapshotPath to review named strategies.`);
+    return undefined;
   }
   const strategyPositions = Array.isArray(parsed.strategyPositions)
     ? parsed.strategyPositions as NonNullable<StrategyFollowUpInput['strategyPositions']>
@@ -376,8 +404,84 @@ function loadStrategySnapshot(path = readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')): St
   return {
     accountKey: firstStringPath(parsed, ['accountKey']),
     defaultRules: isRecord(parsed.defaultRules) ? parsed.defaultRules as StrategyFollowUpInput['defaultRules'] : undefined,
+    sourcePath: path,
     strategyPositions,
   };
+}
+
+function inferStandaloneStrategiesFromPositions(rows: Record<string, unknown>[]): StrategyPositionInput[] {
+  const strategies: StrategyPositionInput[] = [];
+  for (const row of rows) {
+      const uic = firstNumberPath(row, ['Uic', 'PositionBase.Uic']);
+      const amount = firstNumberPath(row, ['PositionBase.Amount', 'Amount']);
+      if (uic === undefined || amount === undefined || amount === 0) {
+        continue;
+      }
+      const assetType = firstStringPath(row, [
+        'AssetType',
+        'PositionBase.AssetType',
+        'DisplayAndFormat.AssetType',
+      ]) ?? 'Stock';
+      const buySell = inferPositionBuySell(row, amount);
+      const symbol = reviewDisplaySymbol(firstStringPath(row, [
+        'DisplayAndFormat.Symbol',
+        'PositionBase.Symbol',
+        'Symbol',
+      ]) ?? `Uic ${uic}`);
+      const entryPrice = firstNumberPath(row, [
+        'PositionBase.OpenPrice',
+        'PositionBase.Price',
+        'PositionBase.AverageOpenPrice',
+        'PositionView.AverageOpenPrice',
+        'AverageOpenPrice',
+        'OpenPrice',
+        'Price',
+      ]);
+      strategies.push({
+        name: `${symbol} unmanaged ${assetType}`,
+        symbol,
+        strategy: 'inferred_unmanaged_position',
+        entryPrice: entryPrice && entryPrice > 0 ? entryPrice : undefined,
+        legs: [
+          {
+            uic,
+            assetType,
+            buySell,
+            amount: Math.abs(amount),
+            expiry: firstStringPath(row, ['DisplayAndFormat.ExpiryDate', 'PositionBase.ExpiryDate', 'ExpiryDate', 'Expiry']),
+            putCall: inferPutCall(row),
+            strike: firstNumberPath(row, ['DisplayAndFormat.Strike', 'PositionBase.Strike', 'Strike']),
+          },
+        ],
+      });
+  }
+  return strategies;
+}
+
+function inferPositionBuySell(row: Record<string, unknown>, amount: number): 'Buy' | 'Sell' {
+  const buySell = firstStringPath(row, ['PositionBase.BuySell', 'BuySell']);
+  if (buySell === 'Sell') {
+    return 'Sell';
+  }
+  if (buySell === 'Buy') {
+    return 'Buy';
+  }
+  return amount < 0 ? 'Sell' : 'Buy';
+}
+
+function inferPutCall(row: Record<string, unknown>): 'Put' | 'Call' | undefined {
+  const value = firstStringPath(row, ['DisplayAndFormat.PutCall', 'PositionBase.PutCall', 'PutCall', 'OptionType']);
+  if (value === 'Put' || value === 'Call') {
+    return value;
+  }
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'p' || normalized === 'put') {
+    return 'Put';
+  }
+  if (normalized === 'c' || normalized === 'call') {
+    return 'Call';
+  }
+  return undefined;
 }
 
 function buildPortfolioStatus(
