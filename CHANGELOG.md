@@ -7,11 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0-rc.1] - 2026-05-21
+## [0.2.0] - 2026-05-21
 
-Release candidate for the strategy-screening and portfolio-planning release.
-This release keeps all strategy tools read-only: no new tool places orders or
-calls precheck.
+Strategy-screening and portfolio-planning release. Strategy tools are
+read-only: no strategy screener/planner calls precheck or places orders.
 
 ### Added
 
@@ -29,6 +28,15 @@ calls precheck.
   snapshot, target allocation, staged deployment, stock allocation plan, option
   satellite plan, issuer/share-class de-duplication, sector caps, and a
   portfolio risk dashboard.
+- Options portfolio thesis planning with guardrailed vs user-driven modes,
+  Greeks/theta gates, scaled options-only sizing, candidate discovery,
+  concentrated-conviction controls, and deterministic entry-timing guidance
+  (`enter`, `scale_in`, `wait`, `avoid`) for pullbacks vs breakdowns.
+- `saxo_review_strategy_positions`, a read-only post-execution monitor for
+  stock and option strategies with deterministic hold/trim/close/roll verdicts.
+- `saxo_oauth_login`, a one-call local OAuth login flow for MCP clients. It
+  opens the browser, waits for the callback, updates in-process tokens, and
+  only persists tokens when `writeToEnvFile=true`.
 - `saxo_feature_availability`, a diagnostic tool for Saxo feature flags such as
   News, Calendar, Gainers/Losers, and Chart.
 - Optional Alpha Vantage enrichment via `ALPHA_VANTAGE_API_KEY` for
@@ -39,6 +47,11 @@ calls precheck.
 - Portfolio planning now distinguishes per-trade risk budgets from portfolio
   stock allocation, so core positions can deploy toward account-level targets
   while tactical/options ideas remain risk-budgeted.
+- `saxo_plan_portfolio_strategy` now exposes stock discovery controls so the
+  tool remains a stocks + options planner, not options-only.
+- Saxo option strategy pricing uses multi-leg/snapshot Greeks before applying
+  hard Greeks gates, so theta/vega/delta/gamma inform reward/risk and decay
+  checks.
 - Stock screening batches price requests and only enriches the best pre-ranked
   candidates with higher-cost context to reduce Saxo rate-limit pressure.
 - Portfolio allocation supports `maxSectorPercent` and reports
@@ -55,11 +68,16 @@ calls precheck.
   portfolio `/me` endpoints where Saxo rejects account-key-filtered requests.
 - Rejected option ideas no longer count as planned portfolio option risk.
 - Alpha Vantage provider errors redact API keys before returning warnings.
+- Windows OAuth browser launch avoids `cmd /c start`, fixing malformed
+  authorize URLs containing `&`.
 
 ### Security
 
 - All strategy, screening, and portfolio-planning tools are registered and
   allowlisted as read-only tools.
+- LIVE order writes remain default-deny and require both
+  `SAXO_ENABLE_LIVE_TRADING=true` and a policy file with
+  `allow_live_writes=true`.
 
 ## [0.1.2] - 2026-05-20
 
@@ -447,8 +465,8 @@ environments, with strict default-deny guards on LIVE order placement.
   sibling Borgels MCP servers to clear transitive Dependabot alerts
   pulled in via the MCP SDK's HTTP transport.
 
-[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.2.0-rc.1...HEAD
-[0.2.0-rc.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.2.0-rc.1
+[Unreleased]: https://github.com/Borgels/mcp-server-saxo/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Borgels/mcp-server-saxo/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Borgels/mcp-server-saxo/releases/tag/v0.1.0

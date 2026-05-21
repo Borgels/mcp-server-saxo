@@ -13,3 +13,8 @@ coverage
 
 # npm pack output
 *.tgz
+
+# Local live-trading / strategy-run artefacts
+policy.live*.json
+live-*.json
+saxo-audit*.jsonl
