@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import type { SaxoClient } from './client.js';
 import { contractMultiplier } from './policy.js';
 import { getInfoPricesList } from './prices.js';
-import { listPositions } from './portfolio.js';
+import { getBalance, listOrders, listPositions } from './portfolio.js';
 import { readEnv } from './env.js';
 
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
@@ -71,6 +71,31 @@ export interface StrategyFollowUpResult {
   filters: {
     accountKey?: string;
     strategiesProvided: number;
+  };
+  portfolioStatus: {
+    cashAvailableForTrading?: number;
+    cashBalance?: number;
+    totalValue?: number;
+    netPositionsValue?: number;
+    marginUtilizationPct?: number;
+    workingOrdersCount?: number;
+    strategiesReviewed: number;
+    holdCount: number;
+    reviewCount: number;
+    considerTrimCount: number;
+    considerCloseCount: number;
+    rollWatchCount: number;
+    totalEntryValue?: number;
+    totalMaxRisk?: number;
+    totalMaxProfit?: number;
+    totalCurrentValue?: number;
+    totalUnrealizedPnL?: number;
+    totalUnrealizedPnLPercentOfMaxRisk?: number;
+    totalDelta?: number;
+    totalGamma?: number;
+    totalTheta?: number;
+    totalVega?: number;
+    totalThetaDailyPercentOfRisk?: number;
   };
   accountPositions: {
     positionsFetched: number;
@@ -165,6 +190,16 @@ export async function reviewStrategyPositions(
     fieldGroups: ['DisplayAndFormat', 'PositionBase', 'PositionView'],
     top: 500,
   });
+  const [balance, workingOrders] = await Promise.all([
+    accountKey ? getBalance(client, { accountKey, clientKey: input.clientKey }) : Promise.resolve(undefined),
+    listOrders(client, {
+      accountKey,
+      clientKey: input.clientKey,
+      fieldGroups: ['DisplayAndFormat'],
+      status: 'Working',
+      top: 500,
+    }),
+  ]);
   const positionRows = feedRows(positions);
   const openAmountByUic = summarizeOpenAmounts(positionRows);
   const underlyingPriceByUic = summarizeUnderlyingPrices(positionRows);
@@ -190,6 +225,7 @@ export async function reviewStrategyPositions(
       accountKey,
       strategiesProvided: strategies.length,
     },
+    portfolioStatus: buildPortfolioStatus(reviews, balance, workingOrders),
     accountPositions: {
       positionsFetched: positionRows.length,
       matchedLegs,
@@ -221,6 +257,64 @@ function loadStrategySnapshot(path = readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')): St
     defaultRules: isRecord(parsed.defaultRules) ? parsed.defaultRules as StrategyFollowUpInput['defaultRules'] : undefined,
     strategyPositions,
   };
+}
+
+function buildPortfolioStatus(
+  reviews: StrategyFollowUpResult['reviews'],
+  balance: unknown,
+  workingOrders: unknown,
+): StrategyFollowUpResult['portfolioStatus'] {
+  const totalEntryValue = sumDefined(reviews.map(review => review.entryValue));
+  const totalMaxRisk = sumDefined(reviews.map(review => review.entryMaxRisk));
+  const totalMaxProfit = sumDefined(reviews.map(review => review.entryMaxProfit));
+  const totalCurrentValue = sumDefined(reviews.map(review => review.currentValue));
+  const totalUnrealizedPnL = sumDefined(reviews.map(review => review.unrealizedPnL));
+  const totalDelta = sumDefined(reviews.map(review => review.netGreeks?.delta));
+  const totalGamma = sumDefined(reviews.map(review => review.netGreeks?.gamma));
+  const totalTheta = sumDefined(reviews.map(review => review.netGreeks?.theta));
+  const totalVega = sumDefined(reviews.map(review => review.netGreeks?.vega));
+  return {
+    cashAvailableForTrading: roundMoney(firstNumberPath(balance, ['CashAvailableForTrading'])),
+    cashBalance: roundMoney(firstNumberPath(balance, ['CashBalance'])),
+    totalValue: roundMoney(firstNumberPath(balance, ['TotalValue'])),
+    netPositionsValue: roundMoney(firstNumberPath(balance, ['NetPositionsValue'])),
+    marginUtilizationPct: roundMoney(firstNumberPath(balance, ['MarginUtilizationPct'])),
+    workingOrdersCount: feedRows(workingOrders).length,
+    strategiesReviewed: reviews.length,
+    holdCount: countVerdicts(reviews, 'hold'),
+    reviewCount: countVerdicts(reviews, 'review'),
+    considerTrimCount: countVerdicts(reviews, 'consider_trim'),
+    considerCloseCount: countVerdicts(reviews, 'consider_close'),
+    rollWatchCount: countVerdicts(reviews, 'roll_watch'),
+    totalEntryValue: roundMoney(totalEntryValue),
+    totalMaxRisk: roundMoney(totalMaxRisk),
+    totalMaxProfit: roundMoney(totalMaxProfit),
+    totalCurrentValue: roundMoney(totalCurrentValue),
+    totalUnrealizedPnL: roundMoney(totalUnrealizedPnL),
+    totalUnrealizedPnLPercentOfMaxRisk: percent(totalUnrealizedPnL, totalMaxRisk),
+    totalDelta: roundGreek(totalDelta),
+    totalGamma: roundGreek(totalGamma),
+    totalTheta: roundGreek(totalTheta),
+    totalVega: roundGreek(totalVega),
+    totalThetaDailyPercentOfRisk: percent(totalTheta, totalMaxRisk),
+  };
+}
+
+function countVerdicts(reviews: StrategyFollowUpResult['reviews'], verdict: FollowUpVerdict): number {
+  return reviews.filter(review => review.verdict === verdict).length;
+}
+
+function sumDefined(values: Array<number | undefined>): number | undefined {
+  let found = false;
+  let total = 0;
+  for (const value of values) {
+    if (value === undefined) {
+      continue;
+    }
+    found = true;
+    total += value;
+  }
+  return found ? total : undefined;
 }
 
 function reviewOneStrategy(

@@ -49,6 +49,14 @@ describe('reviewStrategyPositions', () => {
       daysToEarliestExpiry: undefined,
       warnings: [],
     });
+    expect(result.portfolioStatus).toMatchObject({
+      cashAvailableForTrading: 5000,
+      workingOrdersCount: 1,
+      strategiesReviewed: 1,
+      considerTrimCount: 1,
+      totalCurrentValue: 1200,
+      totalUnrealizedPnL: 200,
+    });
     expect(result.reviews[0]?.legs[0]).toMatchObject({
       assetType: 'Stock',
       closeMid: 120,
@@ -98,6 +106,16 @@ describe('reviewStrategyPositions', () => {
       positionsFetched: 3,
       matchedLegs: 2,
       unmatchedLegs: 0,
+    });
+    expect(result.portfolioStatus).toMatchObject({
+      strategiesReviewed: 1,
+      considerTrimCount: 1,
+      totalMaxRisk: 200,
+      totalMaxProfit: 300,
+      totalCurrentValue: 400,
+      totalUnrealizedPnL: 200,
+      totalUnrealizedPnLPercentOfMaxRisk: 100,
+      totalDelta: 35,
     });
     expect(result.reviews[0]).toMatchObject({
       name: 'AAA call debit spread',
@@ -210,6 +228,22 @@ function followUpFetchMock(): typeof fetch {
           { PositionBase: { Uic: 101, Amount: 1, BuySell: 'Buy' }, PositionView: { UnderlyingCurrentPrice: 102 } },
           { PositionBase: { Uic: 102, Amount: 1, BuySell: 'Sell' }, PositionView: { UnderlyingCurrentPrice: 102 } },
           { PositionBase: { Uic: 201, Amount: 10, BuySell: 'Buy' } },
+        ],
+      });
+    }
+    if (parsed.pathname.endsWith('/port/v1/balances')) {
+      return jsonResponse({
+        CashAvailableForTrading: 5000,
+        CashBalance: 6000,
+        TotalValue: 7000,
+        NetPositionsValue: 1000,
+        MarginUtilizationPct: 0,
+      });
+    }
+    if (parsed.pathname.endsWith('/port/v1/orders')) {
+      return jsonResponse({
+        Data: [
+          { OrderId: 'order-1', Status: 'Working' },
         ],
       });
     }
