@@ -21,9 +21,10 @@ Supported Saxo OpenAPI service groups:
 - Reference Data (instruments, exchanges)
 - Trading (info prices, snapshot chart, order place / modify / cancel / precheck)
 - Portfolio (accounts, balances, positions, closed positions, orders)
+- Value Add (price alert definitions and notification settings)
 
-Streaming subscriptions (WebSocket), Value Add (alerts, performance), and
-Client Management beyond `accounts/me` are out of scope for v1.
+Streaming subscriptions (WebSocket), Value Add performance, and Client
+Management beyond `accounts/me` are out of scope for v1.
 
 ## Quickstart on SIM
 
@@ -479,6 +480,9 @@ rules.
 | `saxo_list_activities` | `GET /port/v1/activities` | Recent account events: orders placed/modified/cancelled, trades, dividends, corporate actions. |
 | `saxo_list_orders` | `GET /port/v1/orders/me` | Working orders. |
 | `saxo_get_order` | `GET /port/v1/orders/{orderId}` | One order by id. |
+| `saxo_list_price_alerts` | `GET /vas/v1/pricealerts/definitions` | List Saxo price alerts, optionally by state. |
+| `saxo_get_price_alert` | `GET /vas/v1/pricealerts/definitions/{id}` | One price alert definition by id. |
+| `saxo_get_price_alert_user_settings` | `GET /vas/v1/pricealerts/usersettings` | Price-alert email/popup/sound settings. |
 
 ### Write — guarded
 
@@ -492,6 +496,10 @@ rules.
 | `saxo_place_multileg_order` | `POST /trade/v2/orders/multileg` | Place a spread atomically with a single net debit/credit limit. |
 | `saxo_modify_multileg_order` | `PATCH /trade/v2/orders/multileg` | Adjust spread Amount or OrderPrice. |
 | `saxo_cancel_multileg_order` | `DELETE /trade/v2/orders/multileg/{id}` | Cancel the whole strategy. |
+| `saxo_create_price_alert` | `POST /vas/v1/pricealerts/definitions` | LIVE alert writes require `SAXO_ENABLE_LIVE_ALERT_WRITES=true` + policy allow. |
+| `saxo_update_price_alert` | `PUT /vas/v1/pricealerts/definitions/{id}` | Partial tool input is merged with the current definition before PUT. |
+| `saxo_delete_price_alerts` | `DELETE /vas/v1/pricealerts/definitions/{ids}` | Delete one or more price alerts. |
+| `saxo_update_price_alert_user_settings` | `PUT /vas/v1/pricealerts/usersettings` | Update email/popup/sound settings. |
 | `saxo_oauth_login` | OAuth2 PKCE | One-call local login; updates in-process tokens. Optional env-file persist. |
 | `saxo_oauth_start` | OAuth2 PKCE | Loopback redirect only; reads app creds from env. |
 | `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional `.env` persist. |
@@ -570,11 +578,18 @@ LIVE writes are denied by default. To enable them you must do **all three**:
 3. Point `SAXO_POLICY_PATH` at a `policy.json` that sets
    `"allow_live_writes": true`.
 
+Price-alert writes are separate from trading writes. To create, update, delete,
+or change notification settings on LIVE you must set
+`SAXO_ENABLE_LIVE_ALERT_WRITES=true` and set
+`"allow_live_alert_writes": true` in policy. This does not enable order
+placement.
+
 A copy of `policy.example.json` is included. Supported fields:
 
 | Field | Effect |
 | --- | --- |
 | `allow_live_writes` | Master switch for all order writes on LIVE. |
+| `allow_live_alert_writes` | Master switch for price-alert create/update/delete/settings writes on LIVE. |
 | `require_precheck_on_live` | Place-order automatically runs precheck first. |
 | `allow_short_option_legs` | Set to `false` when the Saxo option profile does not permit opening short option legs; multi-leg write tools then block sell-to-open option legs before calling Saxo. |
 | `allowed_asset_types` | Whitelist of AssetTypes that may be ordered. |

@@ -5,12 +5,13 @@ import {
   checkOrder,
   checkToolAllowed,
   DEFAULT_POLICY,
+  isLiveAlertWritesEnabled,
   isLiveTradingEnabled,
   resetPolicyCache,
   type SaxoPolicy,
 } from '../src/saxo/policy.js';
 
-const ENV_KEYS = ['SAXO_ENABLE_LIVE_TRADING', 'SAXO_POLICY_PATH'];
+const ENV_KEYS = ['SAXO_ENABLE_LIVE_ALERT_WRITES', 'SAXO_ENABLE_LIVE_TRADING', 'SAXO_POLICY_PATH'];
 const savedEnv: Record<string, string | undefined> = {};
 
 describe('Saxo policy', () => {
@@ -61,6 +62,17 @@ describe('Saxo policy', () => {
     ).toMatchObject({ allowed: true });
   });
 
+  it('allows price alert write tools on SIM without alert-write opt-in', () => {
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_create_price_alert',
+        environment: 'sim',
+        liveTradingEnabled: false,
+        liveAlertWritesEnabled: false,
+      }),
+    ).toMatchObject({ allowed: true });
+  });
+
   it('denies write tools on LIVE when SAXO_ENABLE_LIVE_TRADING is false', () => {
     const decision = checkToolAllowed({
       tool: 'saxo_place_order',
@@ -92,6 +104,38 @@ describe('Saxo policy', () => {
     expect(decision.allowed).toBe(true);
   });
 
+  it('guards LIVE price alert writes separately from trading writes', () => {
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_create_price_alert',
+        environment: 'live',
+        liveTradingEnabled: true,
+        liveAlertWritesEnabled: false,
+        policy: { ...DEFAULT_POLICY, allow_live_writes: true, allow_live_alert_writes: true },
+      }),
+    ).toMatchObject({ allowed: false, reason: expect.stringMatching(/SAXO_ENABLE_LIVE_ALERT_WRITES/) });
+
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_create_price_alert',
+        environment: 'live',
+        liveTradingEnabled: false,
+        liveAlertWritesEnabled: true,
+        policy: { ...DEFAULT_POLICY, allow_live_writes: false, allow_live_alert_writes: false },
+      }),
+    ).toMatchObject({ allowed: false, reason: expect.stringMatching(/allow_live_alert_writes=false/) });
+
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_create_price_alert',
+        environment: 'live',
+        liveTradingEnabled: false,
+        liveAlertWritesEnabled: true,
+        policy: { ...DEFAULT_POLICY, allow_live_writes: false, allow_live_alert_writes: true },
+      }),
+    ).toMatchObject({ allowed: true });
+  });
+
   it('denies unknown tools', () => {
     const decision = checkToolAllowed({
       tool: 'saxo_drop_database',
@@ -109,6 +153,14 @@ describe('Saxo policy', () => {
     expect(isLiveTradingEnabled()).toBe(true);
     process.env.SAXO_ENABLE_LIVE_TRADING = '1';
     expect(isLiveTradingEnabled()).toBe(false);
+  });
+
+  it('reads SAXO_ENABLE_LIVE_ALERT_WRITES with strict boolean parsing', () => {
+    expect(isLiveAlertWritesEnabled()).toBe(false);
+    process.env.SAXO_ENABLE_LIVE_ALERT_WRITES = 'true';
+    expect(isLiveAlertWritesEnabled()).toBe(true);
+    process.env.SAXO_ENABLE_LIVE_ALERT_WRITES = '1';
+    expect(isLiveAlertWritesEnabled()).toBe(false);
   });
 });
 

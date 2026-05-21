@@ -120,6 +120,10 @@ export class SaxoClient {
     return this.request<T>('PATCH', path, query, body);
   }
 
+  put<T>(path: string, body?: unknown, query?: Record<string, QueryValue>): Promise<T> {
+    return this.request<T>('PUT', path, query, body);
+  }
+
   delete<T>(path: string, query?: Record<string, QueryValue>): Promise<T> {
     return this.request<T>('DELETE', path, query);
   }

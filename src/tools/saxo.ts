@@ -34,6 +34,7 @@ import {
   checkMultiLegOrder,
   checkOrder,
   checkToolAllowed,
+  isLiveAlertWritesEnabled,
   isLiveTradingEnabled,
   loadPolicy,
   type OrderPolicyInput,
@@ -51,6 +52,15 @@ import {
 import { screenMarket } from '../saxo/screener.js';
 import { screenStockStrategies } from '../saxo/stock-strategy-screener.js';
 import { getDiagnostics, getFeatureAvailability, getSessionMe } from '../saxo/session.js';
+import {
+  createPriceAlert,
+  deletePriceAlerts,
+  getPriceAlert,
+  getPriceAlertUserSettings,
+  listPriceAlerts,
+  updatePriceAlert,
+  updatePriceAlertUserSettings,
+} from '../saxo/price-alerts.js';
 import {
   cancelMultiLegOrder,
   cancelOrder,
@@ -152,6 +162,44 @@ const modifyMultiLegOrderSchema = z.object({
   MultiLegOrderId: z.string().trim().min(1),
   Amount: z.number().int().positive().optional(),
   OrderPrice: z.number().optional(),
+});
+
+const priceAlertOperatorSchema = z.enum(['GreaterOrEqual', 'LessOrEqual']);
+const priceAlertVariableSchema = z.enum(['AskTick', 'BidTick', 'PercentChange', 'Traded']);
+const priceAlertStateSchema = z.enum(['Disabled', 'Enabled', 'RecentlyTriggered']);
+const alertSoundSchema = z.enum(['Asterisk', 'Beep', 'Exclamation', 'Hand', 'None', 'Question']);
+const priceAlertDefinitionIdSchema = z.union([z.string().trim().min(1), z.number().int().nonnegative()]);
+
+const priceAlertDefinitionSchema = z.object({
+  AccountId: z.string().trim().min(1),
+  Uic: z.number().int().nonnegative(),
+  AssetType: z.string().trim().min(1),
+  TargetValue: z.number(),
+  Operator: priceAlertOperatorSchema,
+  PriceVariable: priceAlertVariableSchema.default('Traded'),
+  ExpiryDate: z.string().trim().min(1).optional(),
+  IsRecurring: z.boolean().default(false),
+  IsExtendedHours: z.boolean().default(false),
+  State: priceAlertStateSchema.default('Enabled'),
+  Comment: z.string().max(128).optional(),
+});
+
+const updatePriceAlertSchema = priceAlertDefinitionSchema.partial().extend({
+  AlertDefinitionId: priceAlertDefinitionIdSchema,
+});
+
+const listPriceAlertsSchema = z.object({
+  inlinecount: z.enum(['AllPages', 'None']).optional(),
+  skip: z.number().int().min(0).optional(),
+  top: z.number().int().min(1).max(100).optional(),
+  state: priceAlertStateSchema.optional(),
+});
+
+const priceAlertUserSettingsSchema = z.object({
+  EmailAddress: z.string().email().optional(),
+  NotifyWithMail: z.boolean().optional(),
+  NotifyWithPopup: z.boolean().optional(),
+  Sound: alertSoundSchema.optional(),
 });
 
 const screenMarketSchema = z.object({
@@ -1089,6 +1137,112 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 
   server.registerTool(
+    'saxo_list_price_alerts',
+    {
+      title: 'List Price Alerts',
+      description: 'List Saxo price alert definitions for the current user, optionally filtered by state.',
+      inputSchema: listPriceAlertsSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_list_price_alerts', input, async () =>
+        jsonToolResult(await listPriceAlerts(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_get_price_alert',
+    {
+      title: 'Get Price Alert',
+      description: 'Fetch one Saxo price alert definition by AlertDefinitionId.',
+      inputSchema: {
+        alertDefinitionId: priceAlertDefinitionIdSchema,
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_price_alert', input, async () =>
+        jsonToolResult(await getPriceAlert(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_create_price_alert',
+    {
+      title: 'Create Price Alert',
+      description:
+        'Create a Saxo price alert definition. LIVE alert writes require SAXO_ENABLE_LIVE_ALERT_WRITES=true plus policy.allow_live_alert_writes=true.',
+      inputSchema: priceAlertDefinitionSchema.shape,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_create_price_alert', input, async () =>
+        jsonToolResult(await createPriceAlert(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_update_price_alert',
+    {
+      title: 'Update Price Alert',
+      description:
+        'Update an existing Saxo price alert definition. Partial input is merged with the current alert before PUT because Saxo expects the full definition body.',
+      inputSchema: updatePriceAlertSchema.shape,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_update_price_alert', input, async () =>
+        jsonToolResult(await updatePriceAlert(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_delete_price_alerts',
+    {
+      title: 'Delete Price Alerts',
+      description:
+        'Delete one or more Saxo price alert definitions. LIVE alert writes require SAXO_ENABLE_LIVE_ALERT_WRITES=true plus policy.allow_live_alert_writes=true.',
+      inputSchema: {
+        alertDefinitionIds: z.array(priceAlertDefinitionIdSchema).min(1).max(50),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_delete_price_alerts', input, async () =>
+        jsonToolResult(await deletePriceAlerts(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_get_price_alert_user_settings',
+    {
+      title: 'Get Price Alert Notification Settings',
+      description: 'Read the current user price-alert notification settings (email, popup, sound).',
+      inputSchema: {},
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_price_alert_user_settings', input, async () =>
+        jsonToolResult(await getPriceAlertUserSettings(client)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_update_price_alert_user_settings',
+    {
+      title: 'Update Price Alert Notification Settings',
+      description:
+        'Update the current user price-alert notification settings. Partial input is merged with current settings before PUT.',
+      inputSchema: priceAlertUserSettingsSchema.shape,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_update_price_alert_user_settings', input, async () =>
+        jsonToolResult(await updatePriceAlertUserSettings(client, input)),
+      ),
+  );
+
+  server.registerTool(
     'saxo_precheck_order',
     {
       title: 'Precheck Order',
@@ -1442,6 +1596,7 @@ async function runAuditedTool<T>(
   const decision = checkToolAllowed({
     tool,
     environment: client.environment,
+    liveAlertWritesEnabled: isLiveAlertWritesEnabled(),
     liveTradingEnabled: isLiveTradingEnabled(),
     policy: loadPolicy(),
   });
@@ -1503,8 +1658,11 @@ function extractOrderId(result: unknown): string | undefined {
   try {
     const data = JSON.parse(text) as Record<string, unknown>;
     const orderId =
-      data.MultiLegOrderId ?? data.OrderId ?? data.OrderID ?? data.orderId;
-    return typeof orderId === 'string' ? orderId : undefined;
+      data.MultiLegOrderId ?? data.OrderId ?? data.OrderID ?? data.orderId ?? data.AlertDefinitionId;
+    if (typeof orderId === 'string') {
+      return orderId;
+    }
+    return typeof orderId === 'number' && Number.isFinite(orderId) ? String(orderId) : undefined;
   } catch {
     return undefined;
   }
@@ -1552,6 +1710,20 @@ function auditTarget(input: unknown): unknown {
     horizon: value.horizon,
     orderId: value.orderId,
     orderIds: value.orderIds,
+    AccountId: value.AccountId,
+    AlertDefinitionId: value.AlertDefinitionId,
+    alertDefinitionId: value.alertDefinitionId,
+    alertDefinitionIds: value.alertDefinitionIds,
+    TargetValue: value.TargetValue,
+    Operator: value.Operator,
+    PriceVariable: value.PriceVariable,
+    State: value.State,
+    IsRecurring: value.IsRecurring,
+    IsExtendedHours: value.IsExtendedHours,
+    hasEmailAddress: typeof value.EmailAddress === 'string' && value.EmailAddress.length > 0,
+    NotifyWithMail: value.NotifyWithMail,
+    NotifyWithPopup: value.NotifyWithPopup,
+    Sound: value.Sound,
     status: value.status,
     fromDate: value.fromDate,
     toDate: value.toDate,

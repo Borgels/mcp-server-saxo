@@ -34,6 +34,9 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_list_activities',
   'saxo_list_orders',
   'saxo_get_order',
+  'saxo_list_price_alerts',
+  'saxo_get_price_alert',
+  'saxo_get_price_alert_user_settings',
 ]);
 
 const WRITE_TOOLS = new Set([
@@ -47,6 +50,13 @@ const WRITE_TOOLS = new Set([
   'saxo_cancel_multileg_order',
 ]);
 
+const ALERT_WRITE_TOOLS = new Set([
+  'saxo_create_price_alert',
+  'saxo_update_price_alert',
+  'saxo_delete_price_alerts',
+  'saxo_update_price_alert_user_settings',
+]);
+
 const OAUTH_TOOLS = new Set([
   'saxo_oauth_login',
   'saxo_oauth_start',
@@ -56,6 +66,7 @@ const OAUTH_TOOLS = new Set([
 
 export interface SaxoPolicy {
   allow_live_writes: boolean;
+  allow_live_alert_writes?: boolean;
   require_precheck_on_live: boolean;
   allow_short_option_legs?: boolean;
   allowed_asset_types?: string[];
@@ -111,6 +122,7 @@ export interface ToolPolicyContext {
   tool: string;
   environment: SaxoEnvironment;
   liveTradingEnabled: boolean;
+  liveAlertWritesEnabled?: boolean;
   policy?: SaxoPolicy;
 }
 
@@ -140,6 +152,26 @@ export function checkToolAllowed(context: ToolPolicyContext): PolicyDecision {
 
   if (OAUTH_TOOLS.has(tool)) {
     return { allowed: true, reason: 'OAuth credential management tool' };
+  }
+
+  if (ALERT_WRITE_TOOLS.has(tool)) {
+    if (environment === 'live') {
+      if (!context.liveAlertWritesEnabled) {
+        return {
+          allowed: false,
+          reason: 'LIVE price alert writes are disabled. Set SAXO_ENABLE_LIVE_ALERT_WRITES=true to opt in.',
+        };
+      }
+      const policy = context.policy ?? DEFAULT_POLICY;
+      if (!policy.allow_live_alert_writes) {
+        return {
+          allowed: false,
+          reason: 'policy.json does not allow live price alert writes (allow_live_alert_writes=false).',
+        };
+      }
+    }
+
+    return { allowed: true, reason: 'price alert write tool authorised for environment' };
   }
 
   if (!WRITE_TOOLS.has(tool)) {
@@ -353,4 +385,8 @@ function isOptionAssetType(assetType: string | undefined): boolean {
 
 export function isLiveTradingEnabled(): boolean {
   return readBoolEnv('SAXO_ENABLE_LIVE_TRADING', false);
+}
+
+export function isLiveAlertWritesEnabled(): boolean {
+  return readBoolEnv('SAXO_ENABLE_LIVE_ALERT_WRITES', false);
 }

@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "mcp-server-saxo",
   "display_name": "Saxo Bank OpenAPI",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
-  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, single-leg and multi-leg option orders, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
+  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, single-leg and multi-leg option orders, Saxo price alerts, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
   "author": {
     "name": "Borgels",
     "url": "https://github.com/Borgels"
@@ -50,6 +50,7 @@
         "ALPHA_VANTAGE_API_KEY": "${user_config.ALPHA_VANTAGE_API_KEY}",
         "SAXO_STRATEGY_SNAPSHOT_PATH": "${user_config.SAXO_STRATEGY_SNAPSHOT_PATH}",
         "SAXO_ENABLE_LIVE_TRADING": "${user_config.SAXO_ENABLE_LIVE_TRADING}",
+        "SAXO_ENABLE_LIVE_ALERT_WRITES": "${user_config.SAXO_ENABLE_LIVE_ALERT_WRITES}",
         "SAXO_POLICY_PATH": "${user_config.SAXO_POLICY_PATH}",
         "SAXO_AUDIT_LOG": "${user_config.SAXO_AUDIT_LOG}"
       }
@@ -130,6 +131,13 @@
       "type": "boolean",
       "title": "Enable LIVE trading",
       "description": "Master switch for LIVE order writes. Must also be allowed in policy.json. Leave false for SIM-only use.",
+      "required": false,
+      "default": false
+    },
+    "SAXO_ENABLE_LIVE_ALERT_WRITES": {
+      "type": "boolean",
+      "title": "Enable LIVE price alert writes",
+      "description": "Master switch for LIVE Saxo price-alert create/update/delete/settings writes. Must also be allowed in policy.json with allow_live_alert_writes=true. Does not enable order/trading writes.",
       "required": false,
       "default": false
     },

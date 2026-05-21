@@ -277,6 +277,139 @@ describe('SaxoClient', () => {
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('DELETE');
   });
 
+  it('creates price alerts against /vas/v1/pricealerts/definitions', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ AlertDefinitionId: '30834' }, 201));
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const { createPriceAlert } = await import('../src/saxo/price-alerts.js');
+
+    await createPriceAlert(client, {
+      AccountId: '13457INET',
+      AssetType: 'FxSpot',
+      Comment: 'EURUSD breakout',
+      ExpiryDate: '2026-09-30T12:00:00Z',
+      IsExtendedHours: false,
+      IsRecurring: true,
+      Operator: 'GreaterOrEqual',
+      PriceVariable: 'AskTick',
+      State: 'Enabled',
+      TargetValue: 1.34595,
+      Uic: 21,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(String(url)).toBe('https://gateway.saxobank.com/sim/openapi/vas/v1/pricealerts/definitions');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(init?.body as string)).toMatchObject({
+      AccountId: '13457INET',
+      AssetType: 'FxSpot',
+      Operator: 'GreaterOrEqual',
+      PriceVariable: 'AskTick',
+      TargetValue: 1.34595,
+      Uic: 21,
+    });
+  });
+
+  it('lists and deletes price alerts with Saxo query and route shape', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const { deletePriceAlerts, listPriceAlerts } = await import('../src/saxo/price-alerts.js');
+
+    await listPriceAlerts(client, { inlinecount: 'AllPages', skip: 1, top: 10, state: 'Enabled' });
+    await deletePriceAlerts(client, { alertDefinitionIds: [30834, '30835'] });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://gateway.saxobank.com/sim/openapi/vas/v1/pricealerts/definitions?%24inlinecount=AllPages&%24skip=1&%24top=10&State=Enabled',
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('GET');
+    expect(String(fetchMock.mock.calls[1]?.[0])).toBe(
+      'https://gateway.saxobank.com/sim/openapi/vas/v1/pricealerts/definitions/30834,30835',
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('DELETE');
+  });
+
+  it('updates price alerts by fetching existing definition and PUTing a merged body', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      if (init?.method === 'GET') {
+        return jsonResponse({
+          AccountId: '13457INET',
+          AssetType: 'FxSpot',
+          ExpiryDate: '2026-09-30T12:00:00Z',
+          IsRecurring: true,
+          Operator: 'GreaterOrEqual',
+          PriceVariable: 'AskTick',
+          State: 'Enabled',
+          TargetValue: 1.34595,
+          Uic: 21,
+        });
+      }
+      return jsonResponse({});
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const { updatePriceAlert } = await import('../src/saxo/price-alerts.js');
+
+    await updatePriceAlert(client, { AlertDefinitionId: '30834', State: 'Disabled' });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://gateway.saxobank.com/sim/openapi/vas/v1/pricealerts/definitions/30834',
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('PUT');
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toMatchObject({
+      AccountId: '13457INET',
+      AssetType: 'FxSpot',
+      Operator: 'GreaterOrEqual',
+      PriceVariable: 'AskTick',
+      State: 'Disabled',
+      TargetValue: 1.34595,
+      Uic: 21,
+    });
+  });
+
+  it('updates price alert user settings by merging current settings before PUT', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      if (init?.method === 'GET') {
+        return jsonResponse({
+          EmailAddress: 'john.doe@broker.com',
+          EmailAddressValidated: true,
+          NotifyWithMail: false,
+          NotifyWithPopup: true,
+          Sound: 'None',
+        });
+      }
+      return jsonResponse({});
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const { updatePriceAlertUserSettings } = await import('../src/saxo/price-alerts.js');
+
+    await updatePriceAlertUserSettings(client, { NotifyWithMail: true });
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://gateway.saxobank.com/sim/openapi/vas/v1/pricealerts/usersettings',
+    );
+    expect(fetchMock.mock.calls[1]?.[1]?.method).toBe('PUT');
+    expect(JSON.parse(fetchMock.mock.calls[1]?.[1]?.body as string)).toEqual({
+      EmailAddress: 'john.doe@broker.com',
+      NotifyWithMail: true,
+      NotifyWithPopup: true,
+      Sound: 'None',
+    });
+  });
+
   it('redacts tokens and secrets from error formatting', () => {
     expect(redactSecrets('Authorization: Bearer abc123def')).toMatch(/Authorization: \[REDACTED\]/);
     expect(redactSecrets('access_token=verysecret')).toMatch(/access_token=\[REDACTED\]/);

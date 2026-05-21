@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-21
+
+### Added
+
+- Saxo price-alert tools for listing, fetching, creating, updating, and
+  deleting price alert definitions via `/vas/v1/pricealerts/definitions`.
+- Saxo price-alert notification settings tools for reading/updating email,
+  popup, and sound preferences via `/vas/v1/pricealerts/usersettings`.
+- Separate LIVE alert-write safety controls:
+  `SAXO_ENABLE_LIVE_ALERT_WRITES=true` plus
+  `policy.allow_live_alert_writes=true`.
+
 ## [0.2.1] - 2026-05-21
 
 ### Fixed

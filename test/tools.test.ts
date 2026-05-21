@@ -9,6 +9,7 @@ import { registerSaxoTools } from '../src/tools/saxo.js';
 
 const ENV_KEYS = [
   'SAXO_AUDIT_LOG',
+  'SAXO_ENABLE_LIVE_ALERT_WRITES',
   'SAXO_ENABLE_LIVE_TRADING',
   'SAXO_POLICY_PATH',
   'SAXO_ENVIRONMENT',
@@ -73,6 +74,13 @@ describe('Saxo tool registration', () => {
       'saxo_list_activities',
       'saxo_list_orders',
       'saxo_get_order',
+      'saxo_list_price_alerts',
+      'saxo_get_price_alert',
+      'saxo_create_price_alert',
+      'saxo_update_price_alert',
+      'saxo_delete_price_alerts',
+      'saxo_get_price_alert_user_settings',
+      'saxo_update_price_alert_user_settings',
       'saxo_precheck_order',
       'saxo_place_order',
       'saxo_modify_order',
@@ -118,6 +126,9 @@ describe('Saxo tool registration', () => {
       'saxo_list_activities',
       'saxo_list_orders',
       'saxo_get_order',
+      'saxo_list_price_alerts',
+      'saxo_get_price_alert',
+      'saxo_get_price_alert_user_settings',
     ];
     for (const id of readOnly) {
       expect(registered[id]?.config.annotations).toMatchObject({
@@ -135,6 +146,10 @@ describe('Saxo tool registration', () => {
       'saxo_place_multileg_order',
       'saxo_modify_multileg_order',
       'saxo_cancel_multileg_order',
+      'saxo_create_price_alert',
+      'saxo_update_price_alert',
+      'saxo_delete_price_alerts',
+      'saxo_update_price_alert_user_settings',
       'saxo_oauth_login',
       'saxo_oauth_start',
       'saxo_oauth_complete',
@@ -210,6 +225,31 @@ describe('Saxo tool registration', () => {
         ],
       }),
     ).rejects.toThrow(/SAXO_ENABLE_LIVE_TRADING/);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('saxo_create_price_alert on LIVE throws before any fetch when alert writes are unset', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}'));
+    const client = new SaxoClient({
+      environment: 'live',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const registered = captureRegisteredTools(client);
+
+    const tool = registered.saxo_create_price_alert;
+    if (!tool) throw new Error('saxo_create_price_alert not registered');
+
+    await expect(
+      tool.handler({
+        AccountId: 'account-id',
+        Uic: 21,
+        AssetType: 'FxSpot',
+        TargetValue: 1.34595,
+        Operator: 'GreaterOrEqual',
+      }),
+    ).rejects.toThrow(/SAXO_ENABLE_LIVE_ALERT_WRITES/);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

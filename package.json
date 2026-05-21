@@ -1,6 +1,6 @@
 {
   "name": "@borgels/mcp-server-saxo",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "MCP server for the Saxo Bank OpenAPI (SIM and LIVE trading).",
   "type": "module",
   "main": "./dist/transports/stdio.js",
