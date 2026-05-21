@@ -141,6 +141,30 @@ interface InfoPrice {
   Greeks?: Record<string, number>;
 }
 
+interface TradablePriceResponse {
+  Greeks?: Record<string, number>;
+  Legs?: Array<{
+    Greeks?: Record<string, number>;
+    Quote?: {
+      Ask?: number;
+      Bid?: number;
+      Mid?: number;
+    };
+    Uic?: number;
+  }>;
+  Quote?: {
+    Ask?: number;
+    Bid?: number;
+    Mid?: number;
+  };
+}
+
+interface PriceSubscriptionResponse {
+  ContextId?: string;
+  ReferenceId?: string;
+  Snapshot?: TradablePriceResponse;
+}
+
 interface OptionContract {
   assetType: 'StockOption';
   ask?: number;
@@ -405,16 +429,20 @@ export async function planOptionStrategy(
     }
   }
 
-  const { plans: greekFilteredPlans, missingGreeksCount, thetaFilteredCount } = filterByGreekRequirements(plans, input);
+  const prefilteredPlans = plans
+    .filter(plan => input.riskBudget === undefined || plan.maxLoss === undefined || plan.maxLoss <= input.riskBudget)
+    .sort((a, b) => b.score.total - a.score.total)
+    .slice(0, prePricingCandidateLimit(plans.length, maxCandidates, input));
+
+  await enrichTradablePricing(client, input.accountKey, prefilteredPlans);
+
+  const { plans: greekFilteredPlans, missingGreeksCount, thetaFilteredCount } = filterByGreekRequirements(prefilteredPlans, input);
   warnings.push(...greekFilterWarnings({ missingGreeksCount, thetaFilteredCount }, input));
 
   const ranked = greekFilteredPlans
-    .filter(plan => input.riskBudget === undefined || plan.maxLoss === undefined || plan.maxLoss <= input.riskBudget)
     .sort((a, b) => b.score.total - a.score.total)
     .slice(0, maxCandidates)
     .map((plan, index) => ({ ...plan, rank: index + 1 }));
-
-  await enrichMultiLegPricing(client, input.accountKey, ranked);
 
   if (ranked.length === 0) {
     warnings.push('No option strategy candidates passed the liquidity, spread, and risk filters.');
@@ -465,27 +493,98 @@ function mergeStrategyContext(
   };
 }
 
-async function enrichMultiLegPricing(
+function prePricingCandidateLimit(
+  planCount: number,
+  maxCandidates: number,
+  input: Pick<PlanOptionStrategyInput, 'requireGreeks' | 'maxThetaDailyPercentOfRisk'>,
+): number {
+  if (input.requireGreeks || input.maxThetaDailyPercentOfRisk !== undefined) {
+    return Math.min(planCount, Math.max(12, maxCandidates * 3));
+  }
+  return Math.min(planCount, maxCandidates);
+}
+
+async function enrichTradablePricing(
   client: SaxoClient,
   accountKey: string,
   plans: OptionStrategyPlan[],
 ): Promise<void> {
   for (const plan of plans) {
-    if (plan.legs.length < 2) {
-      continue;
+    if (plan.legs.length > 1) {
+      await enrichMultiLegPricing(client, accountKey, plan);
+    } else {
+      await enrichSingleLegPricing(client, accountKey, plan);
     }
-    try {
-      plan.pricing = await client.post('/trade/v1/prices/multileg', {
+    refreshGreekDependentFields(plan);
+  }
+}
+
+async function enrichMultiLegPricing(
+  client: SaxoClient,
+  accountKey: string,
+  plan: OptionStrategyPlan,
+): Promise<void> {
+  try {
+    const pricing = await client.post<TradablePriceResponse>('/trade/v1/prices/multileg', {
+      AccountKey: accountKey,
+      FieldGroups: ['Quote', 'Greeks', 'InstrumentPriceDetails'],
+      Legs: plan.legs.map(leg => ({
+        Amount: leg.amount,
+        AssetType: leg.assetType,
+        BuySell: leg.buySell,
+        ToOpenClose: leg.toOpenClose,
+        Uic: leg.uic,
+      })),
+    });
+    plan.pricing = pricing;
+    applyTradablePricingGreeks(plan, pricing);
+  } catch (error) {
+    plan.warnings.push(`Saxo multi-leg pricing was unavailable: ${(error as Error).message}`);
+  }
+}
+
+async function enrichSingleLegPricing(
+  client: SaxoClient,
+  accountKey: string,
+  plan: OptionStrategyPlan,
+): Promise<void> {
+  const firstLeg = plan.legs[0];
+  if (!firstLeg) {
+    return;
+  }
+  const contextId = `mcp_saxo_price_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const referenceId = `leg_${firstLeg.uic}`;
+  let created = false;
+  try {
+    const response = await client.post<PriceSubscriptionResponse>('/trade/v1/prices/subscriptions', {
+      Arguments: {
         AccountKey: accountKey,
-        Legs: plan.legs.map(leg => ({
-          Amount: leg.amount,
-          AssetType: leg.assetType,
-          BuySell: leg.buySell,
-          Uic: leg.uic,
-        })),
-      });
-    } catch (error) {
-      plan.warnings.push(`Saxo multi-leg pricing was unavailable: ${(error as Error).message}`);
+        Amount: firstLeg.amount,
+        AssetType: firstLeg.assetType,
+        FieldGroups: ['Quote', 'Greeks', 'InstrumentPriceDetails'],
+        Uic: firstLeg.uic,
+      },
+      ContextId: contextId,
+      Format: 'application/json',
+      ReferenceId: referenceId,
+      RefreshRate: 1000,
+    });
+    created = true;
+    plan.pricing = response.Snapshot;
+    if (response.Snapshot) {
+      applyTradablePricingGreeks(plan, response.Snapshot);
+    }
+  } catch (error) {
+    plan.warnings.push(`Saxo price subscription snapshot was unavailable: ${(error as Error).message}`);
+  } finally {
+    if (created) {
+      try {
+        await client.delete(
+          `/trade/v1/prices/subscriptions/${encodeURIComponent(contextId)}/${encodeURIComponent(referenceId)}`,
+        );
+      } catch {
+        // Best-effort cleanup. Saxo also expires inactive subscriptions.
+      }
     }
   }
 }
@@ -1083,6 +1182,98 @@ function leg(contract: OptionContract, buySell: 'Buy' | 'Sell'): StrategyLeg {
   };
 }
 
+function applyTradablePricingGreeks(plan: OptionStrategyPlan, pricing: TradablePriceResponse): void {
+  for (const pricedLeg of pricing.Legs ?? []) {
+    if (typeof pricedLeg.Uic !== 'number' || !pricedLeg.Greeks) {
+      continue;
+    }
+    const planLeg = plan.legs.find(item => item.uic === pricedLeg.Uic);
+    if (planLeg) {
+      planLeg.greeks = pricedLeg.Greeks;
+    }
+  }
+
+  const legGreeks = aggregateStrategyGreeks(plan.legs, plan.contractSize, {
+    maxLoss: plan.maxLoss,
+    maxProfit: plan.maxProfit,
+  });
+  if (legGreeks) {
+    plan.greeks = legGreeks;
+    return;
+  }
+
+  const strategyGreeks = strategyGreeksFromSaxo(pricing.Greeks, {
+    maxLoss: plan.maxLoss,
+    maxProfit: plan.maxProfit,
+  });
+  if (strategyGreeks) {
+    plan.greeks = strategyGreeks;
+  }
+}
+
+function strategyGreeksFromSaxo(
+  greeks: Record<string, number> | undefined,
+  economics: { maxLoss?: number; maxProfit?: number },
+): StrategyGreeks | undefined {
+  const delta = readGreek(greeks, 'delta');
+  const gamma = readGreek(greeks, 'gamma');
+  const theta = readGreek(greeks, 'theta');
+  const vega = readGreek(greeks, 'vega');
+  if ([delta, gamma, theta, vega].every(value => value === undefined)) {
+    return undefined;
+  }
+  return {
+    delta: roundGreek(delta),
+    gamma: roundGreek(gamma),
+    theta: roundGreek(theta),
+    vega: roundGreek(vega),
+    thetaDailyPercentOfRisk: percentOf(theta, economics.maxLoss),
+    thetaDailyPercentOfMaxProfit: percentOf(theta, economics.maxProfit),
+  };
+}
+
+function refreshGreekDependentFields(plan: OptionStrategyPlan): void {
+  const greekScore = scoreGreekRisk(plan.strategy, plan.greeks);
+  plan.score.total = roundScore(
+    plan.score.liquidity * 0.3 +
+    plan.score.structure * 0.3 +
+    plan.score.context * 0.25 +
+    greekScore * 0.15,
+  );
+  plan.warnings = refreshGreekWarnings(plan.warnings, plan.strategy, plan.greeks, plan.daysToExpiry);
+}
+
+function refreshGreekWarnings(
+  warnings: string[],
+  strategy: OptionStrategyKind,
+  greeks: StrategyGreeks | undefined,
+  daysToExpiry: number,
+): string[] {
+  const retained = warnings.filter(warning =>
+    !warning.startsWith('Saxo Greeks were unavailable;') &&
+    !warning.startsWith('Theta drag is high for this long-premium structure') &&
+    !warning.startsWith('Short-dated gamma exposure is elevated;'),
+  );
+  return Array.from(new Set([...retained, ...greekWarnings(strategy, greeks, daysToExpiry)]));
+}
+
+function greekWarnings(
+  strategy: OptionStrategyKind,
+  greeks: StrategyGreeks | undefined,
+  daysToExpiry: number,
+): string[] {
+  if (!greeks) {
+    return ['Saxo Greeks were unavailable; theta, delta, gamma, and vega risk were not included in scoring.'];
+  }
+  if ((strategy === 'long_call' || strategy === 'debit_spread') && (greeks.thetaDailyPercentOfRisk ?? 0) > 1) {
+    return [`Theta drag is high for this long-premium structure (${greeks.thetaDailyPercentOfRisk}% of max risk per day).`];
+  }
+  if (daysToExpiry <= 14 && Math.abs(greeks.gamma ?? 0) > 20) {
+    return ['Short-dated gamma exposure is elevated; size and exits need extra discipline.'];
+  }
+  return [];
+}
+
 function filterByGreekRequirements(plans: OptionStrategyPlan[], input: PlanOptionStrategyInput): {
   plans: OptionStrategyPlan[];
   missingGreeksCount: number;
@@ -1358,13 +1549,7 @@ function collectPlanWarnings(
   if ((economics.maxLoss ?? 0) <= 0) {
     warnings.push('Max loss could not be estimated reliably.');
   }
-  if (!greeks) {
-    warnings.push('Saxo Greeks were unavailable; theta, delta, gamma, and vega risk were not included in scoring.');
-  } else if ((strategy === 'long_call' || strategy === 'debit_spread') && (greeks.thetaDailyPercentOfRisk ?? 0) > 1) {
-    warnings.push(`Theta drag is high for this long-premium structure (${greeks.thetaDailyPercentOfRisk}% of max risk per day).`);
-  } else if (daysToExpiry <= 14 && Math.abs(greeks.gamma ?? 0) > 20) {
-    warnings.push('Short-dated gamma exposure is elevated; size and exits need extra discipline.');
-  }
+  warnings.push(...greekWarnings(strategy, greeks, daysToExpiry));
   return warnings;
 }
 

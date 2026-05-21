@@ -375,6 +375,37 @@ describe('screenOptionStrategies', () => {
     expect(result.optionsPortfolioPlan?.rejectedCandidates[0]?.reason).toContain('complete Saxo Greeks were unavailable');
   });
 
+  it('uses multi-leg price snapshot Greeks before applying the hard Greeks gate', async () => {
+    const client = testClient(strategyScreenerFetchMock({ omitGreeks: true, multilegGreeks: true }));
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        requireGreeks: true,
+        maxOptionsRiskPercent: 50,
+        optionTheses: [
+          {
+            name: 'AAA options only',
+            symbols: ['AAA'],
+            role: 'core_conviction',
+            horizon: 'swing',
+            preferredStructures: ['debit_spread'],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.optionsPortfolioPlan?.selectedCandidates.length).toBeGreaterThan(0);
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.greeks).toMatchObject({
+      theta: expect.any(Number),
+      vega: expect.any(Number),
+    });
+  });
+
   it('keeps option-root failures visible as rejected portfolio candidates', async () => {
     const client = testClient(strategyScreenerFetchMock());
 
@@ -413,7 +444,7 @@ function testClient(fetchMock: typeof fetch): SaxoClient {
   });
 }
 
-function strategyScreenerFetchMock(options: { omitGreeks?: boolean } = {}) {
+function strategyScreenerFetchMock(options: { omitGreeks?: boolean; multilegGreeks?: boolean } = {}) {
   return vi.fn<typeof fetch>(async (url, init) => {
     const parsed = new URL(String(url));
     if (String(url).includes('alphavantage.co')) {
@@ -515,9 +546,25 @@ function strategyScreenerFetchMock(options: { omitGreeks?: boolean } = {}) {
       return new Response(null, { status: 204 });
     }
     if (parsed.pathname.endsWith('/trade/v1/prices/multileg')) {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { Legs?: Array<{ Uic?: number }> };
       return jsonResponse({
+        Greeks: options.multilegGreeks ? {
+          Delta: 12,
+          Gamma: 0.5,
+          Theta: -3,
+          Vega: 8,
+        } : undefined,
+        Legs: body.Legs?.map(leg => ({
+          Uic: leg.Uic,
+          Greeks: options.multilegGreeks ? {
+            Delta: 0.45,
+            Gamma: 0.03,
+            Theta: -0.04,
+            Vega: 0.12,
+          } : undefined,
+          Quote: { Bid: 1.8, Ask: 2, Mid: 1.9 },
+        })) ?? [],
         Quote: { Bid: 1.8, Ask: 2, Mid: 1.9, ErrorCode: 'None' },
-        Legs: [],
         StrategyType: 'Custom',
       });
     }
