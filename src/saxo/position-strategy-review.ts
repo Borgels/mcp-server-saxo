@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import type { SaxoClient } from './client.js';
 import { contractMultiplier } from './policy.js';
 import { getInfoPricesList } from './prices.js';
 import { listPositions } from './portfolio.js';
+import { readEnv } from './env.js';
 
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
 export type StrategyInstrumentType = 'stock' | 'option' | 'mixed';
@@ -19,6 +21,7 @@ export interface StrategyLegSnapshotInput {
 export interface StrategyFollowUpInput {
   accountKey?: string;
   clientKey?: string;
+  strategySnapshotPath?: string;
   strategyPositions?: Array<{
     name?: string;
     thesisName?: string;
@@ -34,6 +37,9 @@ export interface StrategyFollowUpInput {
     entryMaxRisk?: number;
     entryMaxProfit?: number;
     entryUnderlyingPrice?: number;
+    probabilityOfProfit?: number;
+    expectedProfit?: number;
+    expectedLoss?: number;
     legs: StrategyLegSnapshotInput[];
     rules?: {
       profitTakePercentOfCost?: number;
@@ -85,6 +91,7 @@ export interface StrategyFollowUpResult {
     entryMaxRisk?: number;
     entryMaxProfit?: number;
     currentValue?: number;
+    currentUnderlyingPrice?: number;
     unrealizedPnL?: number;
     unrealizedPnLPercentOfMaxRisk?: number;
     unrealizedPnLPercentOfMaxProfit?: number;
@@ -94,6 +101,14 @@ export interface StrategyFollowUpResult {
       theta?: number;
       vega?: number;
       thetaDailyPercentOfRisk?: number;
+    };
+    expectedValue?: {
+      probabilityOfProfit?: number;
+      expectedProfit?: number;
+      expectedLoss?: number;
+      estimatedExpectedValue?: number;
+      estimatedExpectedValuePercentOfMaxRisk?: number;
+      notes: string[];
     };
     triggeredRules: string[];
     warnings: string[];
@@ -123,28 +138,44 @@ interface InfoPrice {
   };
 }
 
+interface StrategySnapshotFile {
+  accountKey?: string;
+  defaultRules?: StrategyFollowUpInput['defaultRules'];
+  strategyPositions?: NonNullable<StrategyFollowUpInput['strategyPositions']>;
+}
+
 export async function reviewStrategyPositions(
   client: SaxoClient,
   input: StrategyFollowUpInput,
   now: Date = new Date(),
 ): Promise<StrategyFollowUpResult> {
-  const strategies = input.strategyPositions ?? [];
+  const snapshot = loadStrategySnapshot(input.strategySnapshotPath);
+  const strategies = input.strategyPositions?.length
+    ? input.strategyPositions
+    : snapshot?.strategyPositions ?? [];
   const warnings: string[] = [];
+  if (!input.strategyPositions?.length && snapshot) {
+    warnings.push(`Loaded strategy snapshot from ${input.strategySnapshotPath ?? readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')}.`);
+  }
+  const accountKey = input.accountKey ?? snapshot?.accountKey;
+  const defaultRules = { ...snapshot?.defaultRules, ...input.defaultRules };
   const positions = await listPositions(client, {
-    accountKey: input.accountKey,
+    accountKey,
     clientKey: input.clientKey,
     fieldGroups: ['DisplayAndFormat', 'PositionBase', 'PositionView'],
     top: 500,
   });
   const positionRows = feedRows(positions);
   const openAmountByUic = summarizeOpenAmounts(positionRows);
-  const priceByUic = await fetchPricesByAssetType(client, strategies, input.accountKey, warnings);
+  const underlyingPriceByUic = summarizeUnderlyingPrices(positionRows);
+  const priceByUic = await fetchStrategyPrices(client, strategies, accountKey, warnings);
 
   const reviews = strategies.map((strategy, index) =>
     reviewOneStrategy(strategy, {
-      defaultRules: input.defaultRules,
+      defaultRules,
       now,
       openAmountByUic,
+      underlyingPriceByUic,
       priceByUic,
       fallbackName: `Strategy ${index + 1}`,
     }),
@@ -156,7 +187,7 @@ export async function reviewStrategyPositions(
   return {
     generatedAt: now.toISOString(),
     filters: {
-      accountKey: input.accountKey,
+      accountKey,
       strategiesProvided: strategies.length,
     },
     accountPositions: {
@@ -169,6 +200,29 @@ export async function reviewStrategyPositions(
   };
 }
 
+function loadStrategySnapshot(path = readEnv('SAXO_STRATEGY_SNAPSHOT_PATH')): StrategySnapshotFile | undefined {
+  if (!path) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(`Failed to read strategy snapshot ${path}: ${(error as Error).message}`);
+  }
+  if (!isRecord(parsed)) {
+    throw new Error(`Strategy snapshot ${path} must contain a JSON object.`);
+  }
+  const strategyPositions = Array.isArray(parsed.strategyPositions)
+    ? parsed.strategyPositions as NonNullable<StrategyFollowUpInput['strategyPositions']>
+    : undefined;
+  return {
+    accountKey: firstStringPath(parsed, ['accountKey']),
+    defaultRules: isRecord(parsed.defaultRules) ? parsed.defaultRules as StrategyFollowUpInput['defaultRules'] : undefined,
+    strategyPositions,
+  };
+}
+
 function reviewOneStrategy(
   strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
   context: {
@@ -176,6 +230,7 @@ function reviewOneStrategy(
     fallbackName: string;
     now: Date;
     openAmountByUic: Map<number, number>;
+    underlyingPriceByUic: Map<number, number>;
     priceByUic: Map<number, InfoPrice>;
   },
 ): StrategyFollowUpResult['reviews'][number] {
@@ -187,13 +242,16 @@ function reviewOneStrategy(
   const openLegsMatched = legs.filter(leg => leg.matched).length;
   const instrumentType = inferStrategyInstrumentType(strategy.legs);
   const currentValue = aggregateCurrentValue(legs);
+  const currentUnderlyingPrice = strategyCurrentUnderlyingPrice(strategy.legs, context.underlyingPriceByUic);
   const unrealizedPnL = currentValue !== undefined && entryValue !== undefined
     ? currentValue - entryValue
     : undefined;
   const netGreeks = aggregateGreeks(strategy.legs, context.priceByUic, entryMaxRisk);
+  const expectedValue = expectedValueEstimate(strategy, entryMaxRisk);
   const daysToEarliestExpiry = earliestDte(strategy.legs, context.now);
   const triggeredRules = triggeredFollowUpRules({
     currentValue,
+    currentUnderlyingPrice,
     daysToEarliestExpiry,
     entryValue,
     entryMaxProfit,
@@ -224,10 +282,12 @@ function reviewOneStrategy(
     entryMaxRisk,
     entryMaxProfit,
     currentValue: roundMoney(currentValue),
+    currentUnderlyingPrice: roundMoney(currentUnderlyingPrice),
     unrealizedPnL: roundMoney(unrealizedPnL),
     unrealizedPnLPercentOfMaxRisk: percent(unrealizedPnL, entryMaxRisk),
     unrealizedPnLPercentOfMaxProfit: percent(unrealizedPnL, entryMaxProfit),
     netGreeks,
+    expectedValue,
     triggeredRules,
     warnings,
     legs,
@@ -266,6 +326,7 @@ function reviewLeg(
 
 function triggeredFollowUpRules(input: {
   currentValue?: number;
+  currentUnderlyingPrice?: number;
   daysToEarliestExpiry?: number;
   entryValue?: number;
   entryMaxProfit?: number;
@@ -313,17 +374,15 @@ function triggeredFollowUpRules(input: {
   }
   if (
     input.rules.thesisInvalidBelow !== undefined &&
-    input.currentValue !== undefined &&
-    currentUnitPrice(input.strategy, input.currentValue) !== undefined &&
-    (currentUnitPrice(input.strategy, input.currentValue) as number) <= input.rules.thesisInvalidBelow
+    thesisReferencePrice(input.strategy, input.currentValue, input.currentUnderlyingPrice) !== undefined &&
+    (thesisReferencePrice(input.strategy, input.currentValue, input.currentUnderlyingPrice) as number) <= input.rules.thesisInvalidBelow
   ) {
     triggered.push(`Thesis invalidation reached: current price is at or below ${input.rules.thesisInvalidBelow}.`);
   }
   if (
     input.rules.thesisInvalidAbove !== undefined &&
-    input.currentValue !== undefined &&
-    currentUnitPrice(input.strategy, input.currentValue) !== undefined &&
-    (currentUnitPrice(input.strategy, input.currentValue) as number) >= input.rules.thesisInvalidAbove
+    thesisReferencePrice(input.strategy, input.currentValue, input.currentUnderlyingPrice) !== undefined &&
+    (thesisReferencePrice(input.strategy, input.currentValue, input.currentUnderlyingPrice) as number) >= input.rules.thesisInvalidAbove
   ) {
     triggered.push(`Thesis invalidation reached: current price is at or above ${input.rules.thesisInvalidAbove}.`);
   }
@@ -417,19 +476,39 @@ function aggregateGreek(
   return found ? total : undefined;
 }
 
-async function fetchPricesByAssetType(
+async function fetchStrategyPrices(
   client: SaxoClient,
   strategies: NonNullable<StrategyFollowUpInput['strategyPositions']>,
   accountKey: string | undefined,
   warnings: string[],
 ): Promise<Map<number, InfoPrice>> {
+  const priceByUic = new Map<number, InfoPrice>();
+  await fetchStockPricesByAssetType(client, strategies, accountKey, warnings, priceByUic);
+  for (const strategy of strategies) {
+    if (!strategy.legs.some(leg => isOptionAssetType(inferLegAssetType(leg)))) {
+      continue;
+    }
+    await fetchMultiLegStrategyPrices(client, strategy, accountKey, warnings, priceByUic);
+  }
+  return priceByUic;
+}
+
+async function fetchStockPricesByAssetType(
+  client: SaxoClient,
+  strategies: NonNullable<StrategyFollowUpInput['strategyPositions']>,
+  accountKey: string | undefined,
+  warnings: string[],
+  priceByUic: Map<number, InfoPrice>,
+): Promise<void> {
   const byAssetType = new Map<string, number[]>();
   for (const leg of strategies.flatMap(strategy => strategy.legs)) {
     const assetType = inferLegAssetType(leg);
+    if (isOptionAssetType(assetType)) {
+      continue;
+    }
     byAssetType.set(assetType, unique([...(byAssetType.get(assetType) ?? []), leg.uic]));
   }
 
-  const priceByUic = new Map<number, InfoPrice>();
   for (const [assetType, uics] of byAssetType.entries()) {
     const prices = await getInfoPricesList(client, {
       accountKey,
@@ -446,7 +525,47 @@ async function fetchPricesByAssetType(
       }
     }
   }
-  return priceByUic;
+}
+
+async function fetchMultiLegStrategyPrices(
+  client: SaxoClient,
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  accountKey: string | undefined,
+  warnings: string[],
+  priceByUic: Map<number, InfoPrice>,
+): Promise<void> {
+  try {
+    const pricing = await client.post<{
+      Legs?: Array<{
+        AssetType?: string;
+        Greeks?: Record<string, number>;
+        Quote?: InfoPrice['Quote'];
+        Uic?: number;
+      }>;
+    }>('/trade/v1/prices/multileg', {
+      AccountKey: accountKey,
+      FieldGroups: ['Quote', 'Greeks', 'InstrumentPriceDetails'],
+      Legs: strategy.legs.map(leg => ({
+        Amount: Math.abs(leg.amount),
+        AssetType: inferLegAssetType(leg),
+        BuySell: leg.buySell,
+        ToOpenClose: 'ToClose',
+        Uic: leg.uic,
+      })),
+    });
+    for (const leg of pricing.Legs ?? []) {
+      if (typeof leg.Uic === 'number') {
+        priceByUic.set(leg.Uic, {
+          Uic: leg.Uic,
+          AssetType: leg.AssetType,
+          Greeks: leg.Greeks,
+          Quote: leg.Quote,
+        });
+      }
+    }
+  } catch (error) {
+    warnings.push(`${strategy.name ?? strategy.symbol ?? 'strategy'}: Saxo multi-leg price snapshot unavailable: ${(error as Error).message}`);
+  }
 }
 
 function buildEntryValue(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): number | undefined {
@@ -464,6 +583,71 @@ function buildEntryValue(strategy: NonNullable<StrategyFollowUpInput['strategyPo
     return -strategy.entryNetCredit * strategyMultiplier(strategy);
   }
   return undefined;
+}
+
+function thesisReferencePrice(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  currentValue: number | undefined,
+  currentUnderlyingPrice: number | undefined,
+): number | undefined {
+  if (currentUnderlyingPrice !== undefined && strategy.legs.some(leg => isOptionAssetType(inferLegAssetType(leg)))) {
+    return currentUnderlyingPrice;
+  }
+  if (currentValue === undefined) {
+    return undefined;
+  }
+  return currentUnitPrice(strategy, currentValue);
+}
+
+function strategyCurrentUnderlyingPrice(
+  legs: StrategyLegSnapshotInput[],
+  underlyingPriceByUic: Map<number, number>,
+): number | undefined {
+  for (const leg of legs) {
+    const price = underlyingPriceByUic.get(leg.uic);
+    if (price !== undefined) {
+      return price;
+    }
+  }
+  return undefined;
+}
+
+function expectedValueEstimate(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  entryMaxRisk: number | undefined,
+): StrategyFollowUpResult['reviews'][number]['expectedValue'] | undefined {
+  const probability = strategy.probabilityOfProfit;
+  if (probability === undefined) {
+    return undefined;
+  }
+  const p = probability > 1 ? probability / 100 : probability;
+  if (p < 0 || p > 1) {
+    return {
+      probabilityOfProfit: probability,
+      notes: ['Probability of profit must be 0-1 or 0-100.'],
+    };
+  }
+  const expectedProfit = strategy.expectedProfit ?? strategy.entryMaxProfit;
+  const expectedLoss = strategy.expectedLoss ?? entryMaxRisk;
+  const notes: string[] = [];
+  if (expectedProfit === undefined) {
+    notes.push('Expected profit unavailable; set expectedProfit or entryMaxProfit for EV.');
+  }
+  if (expectedLoss === undefined) {
+    notes.push('Expected loss unavailable; set expectedLoss or entryMaxRisk for EV.');
+  }
+  const estimatedExpectedValue =
+    expectedProfit !== undefined && expectedLoss !== undefined
+      ? p * expectedProfit - (1 - p) * expectedLoss
+      : undefined;
+  return {
+    probabilityOfProfit: roundMoney(p * 100),
+    expectedProfit,
+    expectedLoss,
+    estimatedExpectedValue: roundMoney(estimatedExpectedValue),
+    estimatedExpectedValuePercentOfMaxRisk: percent(estimatedExpectedValue, entryMaxRisk),
+    notes,
+  };
 }
 
 function strategyMultiplier(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): number {
@@ -522,6 +706,19 @@ function summarizeOpenAmounts(rows: Record<string, unknown>[]): Map<number, numb
     const buySell = firstStringPath(row, ['PositionBase.BuySell', 'BuySell']);
     const signed = buySell === 'Sell' ? -Math.abs(amount) : amount;
     byUic.set(uic, (byUic.get(uic) ?? 0) + signed);
+  }
+  return byUic;
+}
+
+function summarizeUnderlyingPrices(rows: Record<string, unknown>[]): Map<number, number> {
+  const byUic = new Map<number, number>();
+  for (const row of rows) {
+    const uic = firstNumberPath(row, ['Uic', 'PositionBase.Uic']);
+    if (uic === undefined) continue;
+    const underlyingPrice = firstNumberPath(row, ['PositionView.UnderlyingCurrentPrice']);
+    if (underlyingPrice !== undefined) {
+      byUic.set(uic, underlyingPrice);
+    }
   }
   return byUic;
 }

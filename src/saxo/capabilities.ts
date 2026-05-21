@@ -391,6 +391,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     examples: [
       {
         accountKey: 'AccountKey...',
+        strategySnapshotPath: './live-options-actual-strategy.json',
         defaultRules: {
           profitTakePercentOfCost: 25,
           lossExitPercentOfCost: 10,
@@ -437,8 +438,9 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     identifierFormats: ['AccountKey + strategyPositions[].legs[].uic'],
     safetyNotes: [
       'Read-only review. Does not call precheck, place, modify, or cancel orders.',
-      'Requires the executed strategy legs or saved plan metadata to evaluate a position as part of a named strategy.',
-      'Stock reviews use entry cost/price rules; option reviews additionally use Greeks, theta, expiry, roll, and max-profit/max-risk rules when supplied.',
+      'Requires the executed strategy legs or a saved strategySnapshotPath / SAXO_STRATEGY_SNAPSHOT_PATH to evaluate a position as part of a named strategy.',
+      'Stock reviews use entry cost/price rules; option reviews additionally use Greeks, theta, expiry, roll, underlying-price thesis invalidation, and max-profit/max-risk rules when supplied.',
+      'Option strategies can include probabilityOfProfit plus expectedProfit/expectedLoss for a simple deterministic expected-value estimate.',
       'Returns decision support verdicts such as hold, review, consider_trim, consider_close, and roll_watch.',
     ],
     keywords: ['position follow-up', 'strategy monitor', 'stocks', 'options', 'roll', 'trim', 'close', 'theta', 'greeks'],

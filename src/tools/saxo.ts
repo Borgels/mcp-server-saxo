@@ -455,6 +455,7 @@ const strategyFollowUpRulesSchema = z.object({
 const strategyPositionReviewSchema = z.object({
   accountKey: z.string().trim().min(1).optional(),
   clientKey: z.string().trim().min(1).optional(),
+  strategySnapshotPath: z.string().trim().min(1).optional(),
   defaultRules: strategyFollowUpRulesSchema.optional(),
   strategyPositions: z.array(z.object({
     name: z.string().trim().min(1).max(200).optional(),
@@ -471,6 +472,9 @@ const strategyPositionReviewSchema = z.object({
     entryMaxRisk: z.number().positive().optional(),
     entryMaxProfit: z.number().positive().optional(),
     entryUnderlyingPrice: z.number().positive().optional(),
+    probabilityOfProfit: z.number().min(0).max(100).optional(),
+    expectedProfit: z.number().min(0).optional(),
+    expectedLoss: z.number().min(0).optional(),
     legs: z.array(z.object({
       uic: z.number().int().positive(),
       assetType: z.string().trim().min(1).optional(),

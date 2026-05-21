@@ -17,4 +17,5 @@ coverage
 # Local live-trading / strategy-run artefacts
 policy.live*.json
 live-*.json
+strategy-snapshot*.json
 saxo-audit*.jsonl
