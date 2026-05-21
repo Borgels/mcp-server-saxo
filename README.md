@@ -406,6 +406,15 @@ Use `portfolioProfile="concentrated_conviction"` plus
 and `fragmentationPolicy="reject"` when the account should favor fewer,
 larger, easier-to-monitor option positions instead of many small trades.
 
+Use `saxo_review_strategy_positions` after execution to monitor open option
+strategies against the plan you opened. Pass the executed legs and entry
+metrics from the selected plan or fill. The tool matches those legs to open
+Saxo positions, refreshes quotes and Greeks, estimates current strategy value
+and P/L, and evaluates deterministic profit-taking, loss, theta, DTE, roll,
+and close rules. It returns verdicts such as `hold`, `review`,
+`consider_trim`, `consider_close`, and `roll_watch`; execution remains a
+separate explicit order workflow.
+
 ## Tools
 
 All tools are registered with MCP annotations (`readOnlyHint`,
@@ -439,6 +448,7 @@ rules.
 | `saxo_screen_option_strategies` | Market screener + chart TA + OptionsChain IV + planner | Cross-symbol options strategy screening. |
 | `saxo_screen_stock_strategies` | Saxo instruments + prices + chart TA + optional fundamentals/news | Opinionated stock strategy screening with decision briefs. |
 | `saxo_plan_portfolio_strategy` | Account snapshot + stock/options screeners | Whole-account target allocation, staged deployment, and risk dashboard. |
+| `saxo_review_strategy_positions` | Positions + quotes + Greeks | Post-execution strategy follow-up with hold/trim/close/roll verdicts. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
 | `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions (one row per fill). |

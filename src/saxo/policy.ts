@@ -25,6 +25,7 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_screen_option_strategies',
   'saxo_screen_stock_strategies',
   'saxo_plan_portfolio_strategy',
+  'saxo_review_strategy_positions',
   'saxo_list_accounts',
   'saxo_get_balance',
   'saxo_list_positions',

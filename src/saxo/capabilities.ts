@@ -379,6 +379,47 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['portfolio', 'allocation', 'strategy', 'whole account', 'cash deployment', 'stocks', 'options', 'leaps', 'thesis'],
   },
   {
+    id: 'saxo_review_strategy_positions',
+    title: 'Review Strategy Positions',
+    description:
+      'Read-only post-execution strategy monitor for option positions. Matches expected strategy legs to open Saxo positions, refreshes quotes and Greeks, evaluates P/L, theta, DTE, profit-taking, loss, roll, and close rules, and returns deterministic follow-up verdicts.',
+    risk: 'read',
+    examples: [
+      {
+        accountKey: 'AccountKey...',
+        defaultRules: {
+          profitTakePercentOfMaxProfit: 60,
+          lossExitPercentOfMaxRisk: 50,
+          rollWhenDaysToExpiryBelow: 21,
+          closeWhenDaysToExpiryBelow: 7,
+          maxThetaDailyPercentOfRisk: 1,
+        },
+        strategyPositions: [
+          {
+            name: 'NVDA Jul call debit spread',
+            thesisName: 'AI semis directional options',
+            symbol: 'NVDA',
+            strategy: 'debit_spread',
+            entryNetDebit: 18.15,
+            entryMaxRisk: 1815,
+            entryMaxProfit: 2685,
+            legs: [
+              { uic: 56275354, buySell: 'Buy', amount: 1, expiry: '2026-07-17', putCall: 'Call', strike: 215 },
+              { uic: 53837883, buySell: 'Sell', amount: 1, expiry: '2026-07-17', putCall: 'Call', strike: 250 },
+            ],
+          },
+        ],
+      },
+    ],
+    identifierFormats: ['AccountKey + strategyPositions[].legs[].uic'],
+    safetyNotes: [
+      'Read-only review. Does not call precheck, place, modify, or cancel orders.',
+      'Requires the executed strategy legs or saved plan metadata to evaluate a multi-leg position as one strategy.',
+      'Returns decision support verdicts such as hold, review, consider_trim, consider_close, and roll_watch.',
+    ],
+    keywords: ['position follow-up', 'strategy monitor', 'roll', 'trim', 'close', 'theta', 'greeks', 'options'],
+  },
+  {
     id: 'saxo_list_accounts',
     title: 'List Accounts',
     description: "List the authenticated client's trading accounts.",

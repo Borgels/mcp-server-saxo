@@ -19,6 +19,7 @@ import {
 import { planOptionStrategy } from '../saxo/options.js';
 import { screenOptionStrategies } from '../saxo/option-strategy-screener.js';
 import { planPortfolioStrategy } from '../saxo/portfolio-strategy.js';
+import { reviewStrategyPositions } from '../saxo/position-strategy-review.js';
 import {
   getBalance,
   getOrder,
@@ -427,6 +428,44 @@ const portfolioStrategySchema = z.object({
   includeFundamentalContext: z.boolean().default(true),
 });
 
+const strategyFollowUpRulesSchema = z.object({
+  profitTakePercentOfMaxProfit: z.number().min(0).max(1000).optional(),
+  lossExitPercentOfMaxRisk: z.number().min(0).max(1000).optional(),
+  rollWhenDaysToExpiryBelow: z.number().int().min(0).max(3650).optional(),
+  closeWhenDaysToExpiryBelow: z.number().int().min(0).max(3650).optional(),
+  thesisInvalidBelow: z.number().optional(),
+  thesisInvalidAbove: z.number().optional(),
+  maxThetaDailyPercentOfRisk: z.number().min(0).max(100).optional(),
+});
+
+const strategyPositionReviewSchema = z.object({
+  accountKey: z.string().trim().min(1).optional(),
+  clientKey: z.string().trim().min(1).optional(),
+  defaultRules: strategyFollowUpRulesSchema.optional(),
+  strategyPositions: z.array(z.object({
+    name: z.string().trim().min(1).max(200).optional(),
+    thesisName: z.string().trim().min(1).max(200).optional(),
+    symbol: z.string().trim().min(1).max(40).optional(),
+    strategy: z.string().trim().min(1).max(80).optional(),
+    openedAt: z.string().trim().min(1).optional(),
+    entryNetDebit: z.number().optional(),
+    entryNetCredit: z.number().optional(),
+    entryMaxRisk: z.number().positive().optional(),
+    entryMaxProfit: z.number().positive().optional(),
+    entryUnderlyingPrice: z.number().positive().optional(),
+    legs: z.array(z.object({
+      uic: z.number().int().positive(),
+      assetType: z.string().trim().min(1).default('StockOption'),
+      buySell: z.enum(['Buy', 'Sell']),
+      amount: z.number().positive(),
+      expiry: z.string().trim().optional(),
+      putCall: z.enum(['Put', 'Call']).optional(),
+      strike: z.number().optional(),
+    })).min(1).max(8),
+    rules: strategyFollowUpRulesSchema.optional(),
+  })).min(0).max(50).default([]),
+});
+
 export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   server.registerTool(
     'saxo_capabilities',
@@ -832,6 +871,21 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_plan_portfolio_strategy', input, async () =>
         jsonToolResult(await planPortfolioStrategy(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_review_strategy_positions',
+    {
+      title: 'Review Strategy Positions',
+      description:
+        'Read-only follow-up review for executed option strategies. Matches expected legs to open positions, refreshes quotes/Greeks, evaluates profit/loss, theta, DTE, roll/trim/close rules, and returns deterministic decision support. Does not precheck or place orders.',
+      inputSchema: strategyPositionReviewSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_review_strategy_positions', input, async () =>
+        jsonToolResult(await reviewStrategyPositions(client, input)),
       ),
   );
 
