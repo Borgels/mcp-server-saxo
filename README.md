@@ -323,10 +323,19 @@ optionable underlyings first and then rank account-aware option strategy plans:
 }
 ```
 
+Option strategy planning uses Saxo option-chain quotes, Saxo Greeks, optional
+OptionsChain IV context, and account-aware sizing. Multi-leg candidates include
+aggregated net delta, gamma, theta, and vega; long-premium structures such as
+long calls and debit spreads are penalized when theta decay is large relative
+to max risk.
+
 Use `saxo_plan_portfolio_strategy` for whole-account deployment. It reads the
 account snapshot, runs the stock and option screeners, then returns target
 allocation, staged deployment, stock allocation, option satellite candidates,
-sector exposure, and portfolio-level risk warnings:
+sector exposure, and portfolio-level risk warnings. For generic options
+portfolio planning, pass `optionTheses` to describe each sleeve; the planner
+uses guardrailed sizing by default and requires explicit input for concentrated
+conviction risk:
 
 ```json
 {
@@ -340,6 +349,17 @@ sector exposure, and portfolio-level risk warnings:
   "maxSectorPercent": 35,
   "maxOptionsRiskPercent": 5,
   "riskBudgetPercentPerIdea": 1,
+  "optionTheses": [
+    {
+      "name": "Long-term stock replacement",
+      "symbols": ["NVO"],
+      "role": "core_conviction",
+      "conviction": "high",
+      "horizon": "leaps",
+      "preferredStructures": ["long_call", "debit_spread"],
+      "targetRiskPercent": 5
+    }
+  ],
   "includeStocks": true,
   "includeOptions": true
 }
@@ -349,7 +369,9 @@ Portfolio planning is read-only. It never calls precheck or places orders.
 Stock allocation de-duplicates issuer/share-class duplicates such as
 `GOOG`/`GOOGL`. `maxSectorPercent` is enforced when sector data is available
 from fundamentals context; otherwise the response includes a warning instead
-of pretending sector caps were applied.
+of pretending sector caps were applied. Option thesis output includes selected
+and rejected candidates, thesis budgets, max-loss exposure, expiry buckets,
+strategy mix, deployment rules, and simple scenario notes.
 
 ## Tools
 

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SaxoClient } from '../src/saxo/client.js';
 import { setMarketContextFetchImpl } from '../src/saxo/market-context.js';
 import { screenOptionStrategies } from '../src/saxo/option-strategy-screener.js';
+import { planPortfolioStrategy } from '../src/saxo/portfolio-strategy.js';
 
 describe('screenOptionStrategies', () => {
   it('uses explicit symbols, ranks globally, and caps returned plans per symbol before filling', async () => {
@@ -291,6 +292,87 @@ describe('screenOptionStrategies', () => {
     expect(result.underlyings.find(item => item.symbol === 'BBB')?.skipReason).toContain('rate-limit');
     expect(result.warnings.join(' ')).toContain('Stopped option strategy screening early');
   });
+
+  it('builds guardrailed options portfolio sleeves from explicit option theses', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        maxOptionsRiskPercent: 20,
+        maxOptionIdeas: 3,
+        optionTheses: [
+          {
+            name: 'AAA conviction',
+            symbols: ['AAA'],
+            role: 'core_conviction',
+            conviction: 'high',
+            horizon: 'swing',
+            preferredStructures: ['debit_spread', 'put_credit_spread'],
+            targetRiskPercent: 50,
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.optionsPortfolioPlan).toMatchObject({
+      mode: 'guardrailed',
+      totalBudget: 20_000,
+    });
+    expect(result.optionsPortfolioPlan?.sleeves[0]).toMatchObject({
+      thesisName: 'AAA conviction',
+      targetRisk: 10_000,
+    });
+    expect(result.optionsPortfolioPlan?.selectedCandidates.length).toBeGreaterThan(0);
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.plannedRisk).toBeLessThanOrEqual(5_000);
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.greeks).toMatchObject({
+      theta: expect.any(Number),
+      thetaDailyPercentOfRisk: expect.any(Number),
+    });
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.rationale).toContain('Net theta');
+    expect(result.optionsRiskDashboard).toMatchObject({
+      maxOptionsRiskDollars: 20_000,
+      maxThesisRiskDollars: 10_000,
+      maxSingleTradeRiskDollars: 5_000,
+    });
+    expect(result.optionAllocationPlan[0]).toMatchObject({
+      symbol: 'AAA',
+      recommendedContracts: 1,
+    });
+  });
+
+  it('keeps option-root failures visible as rejected portfolio candidates', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        optionTheses: [
+          {
+            name: 'Unavailable options',
+            symbols: ['MISS'],
+            preferredStructures: ['long_call'],
+            horizon: 'leaps',
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.optionsPortfolioPlan?.selectedCandidates).toHaveLength(0);
+    expect(result.optionsPortfolioPlan?.rejectedCandidates[0]).toMatchObject({
+      thesisName: 'Unavailable options',
+      symbol: 'MISS',
+      reason: expect.stringContaining('No StockOption root'),
+    });
+  });
 });
 
 function testClient(fetchMock: typeof fetch): SaxoClient {
@@ -540,6 +622,12 @@ function optionPrice(Uic: number) {
   const quote = table[lastTwo] ?? { bid: 1, ask: 1.2, oi: 500 };
   return {
     DisplayAndFormat: { Description: `OPT${Uic}`, Symbol: `OPT${Uic}` },
+    Greeks: {
+      Delta: lastTwo <= 3 ? -0.35 : 0.45,
+      Gamma: 0.03,
+      Theta: -0.04,
+      Vega: 0.1,
+    },
     InstrumentPriceDetails: { IsMarketOpen: true, OpenInterest: quote.oi, ShortTradeDisabled: false },
     LastUpdated: '2026-01-01T12:00:00.000Z',
     PriceInfoDetails: { AskSize: 25, BidSize: 25, Volume: 50 },

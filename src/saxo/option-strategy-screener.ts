@@ -289,7 +289,7 @@ const PLAYBOOK_DEFAULTS: Record<StrategyPlaybook, PlaybookDefaults> = {
   },
   long_term_directional: {
     objective: 'directional',
-    strategies: ['debit_spread'],
+    strategies: ['long_call', 'debit_spread'],
     minDte: 60,
     maxDte: 365,
     minOpenInterest: 50,
@@ -298,7 +298,7 @@ const PLAYBOOK_DEFAULTS: Record<StrategyPlaybook, PlaybookDefaults> = {
   },
   leaps_replacement: {
     objective: 'stock_replacement',
-    strategies: ['debit_spread'],
+    strategies: ['long_call', 'debit_spread'],
     minDte: 180,
     maxDte: 730,
     minOpenInterest: 10,
@@ -1177,13 +1177,17 @@ function objectiveScore(plan: ScreenOptionStrategiesResult['Data'][number], obje
       : 35;
   }
   if (objective === 'directional') {
-    return plan.strategy === 'debit_spread' ? 95 : 55;
+    return plan.strategy === 'debit_spread' || plan.strategy === 'long_call' ? 95 : 55;
   }
   if (objective === 'volatility') {
     return plan.strategy === 'iron_condor' || plan.strategy.endsWith('credit_spread') ? 90 : 55;
   }
   if (objective === 'stock_replacement') {
-    return plan.strategy === 'debit_spread' && plan.daysToExpiry >= 120 ? 95 : plan.strategy === 'debit_spread' ? 70 : 30;
+    return (plan.strategy === 'debit_spread' || plan.strategy === 'long_call') && plan.daysToExpiry >= 120
+      ? 95
+      : plan.strategy === 'debit_spread' || plan.strategy === 'long_call'
+        ? 70
+        : 30;
   }
   return plan.maxLoss !== undefined && plan.maxLoss <= 1_000 ? 90 : 55;
 }
@@ -1197,6 +1201,9 @@ function riskProfileScore(plan: ScreenOptionStrategiesResult['Data'][number], ri
     return clampScore(lossScore * 0.65 + definedRiskScore * 0.35);
   }
   if (riskProfile === 'aggressive') {
+    if (plan.strategy === 'long_call') {
+      return clampScore(scaleUpLocal(maxLoss, 250, 3_000) * 0.55 + scaleUpLocal(plan.daysToExpiry, 90, 540) * 0.45);
+    }
     return clampScore(scaleUpLocal(rewardToRisk, 0.2, 2) * 0.6 + scaleUpLocal(maxLoss, 250, 3_000) * 0.4);
   }
   return clampScore(scaleUpLocal(rewardToRisk, 0.15, 0.8) * 0.5 + scaleDownLocal(maxLoss, 500, 4_000) * 0.5);

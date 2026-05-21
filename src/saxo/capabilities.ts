@@ -235,7 +235,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_plan_option_strategy',
     title: 'Plan Option Strategy',
     description:
-      'Generate ranked read-only option trade plans for cash-secured puts, vertical spreads, debit spreads, and iron condors using Saxo option-chain data, optional Saxo IV context, and caller-provided external context.',
+      'Generate ranked read-only option trade plans for cash-secured puts, long calls, vertical spreads, debit spreads, and iron condors using Saxo option-chain data, Saxo Greeks, optional Saxo IV context, and caller-provided external context.',
     risk: 'read',
     examples: [
       {
@@ -250,15 +250,16 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     safetyNotes: [
       'Read-only strategy planning. Does not call precheck or place orders.',
       'Returns precheck draft payloads for separate manual use with guarded order tools.',
+      'Aggregates leg Greeks and penalizes unfavorable theta decay when ranking long-premium structures.',
       'Not investment advice; outputs are deterministic screens based on available Saxo data.',
     ],
-    keywords: ['option', 'strategy', 'trade plan', 'cash secured put', 'vertical spread', 'iron condor'],
+    keywords: ['option', 'strategy', 'trade plan', 'cash secured put', 'long call', 'leaps', 'vertical spread', 'iron condor'],
   },
   {
     id: 'saxo_screen_option_strategies',
     title: 'Screen Option Strategies',
     description:
-      'Opinionated read-only screener that finds liquid US stock underlyings, derives Saxo chart-based technical and OptionsChain IV context, checks StockOption availability, runs strategy planning, and ranks option trade-plan candidates across symbols.',
+      'Opinionated read-only screener that finds liquid US stock underlyings, derives Saxo chart-based technical, OptionsChain IV, and Greeks context, checks StockOption availability, runs strategy planning, and ranks option trade-plan candidates across symbols.',
     risk: 'read',
     examples: [
       {
@@ -288,6 +289,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Fetches account balance and positions by default for sizing and decision-brief context; set includeAccountContext=false to opt out.',
       'Scans a larger Saxo stock universe before ranking underlyings; tune maxUnderlyingScan when you need a faster or broader pass.',
       'Saxo chart data and short-lived OptionsChain subscriptions are the default sources for deterministic TA and IV context.',
+      'Saxo Greeks from option quotes are aggregated across legs so theta, delta, gamma, and vega affect strategy scoring and warnings.',
       'Alpha Vantage is optional enrichment for news/earnings only and requires ALPHA_VANTAGE_API_KEY plus includeNewsContext=true.',
       'External news or LLM context can be supplied by the caller via externalContextBySymbol.',
     ],
@@ -325,7 +327,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_plan_portfolio_strategy',
     title: 'Plan Portfolio Strategy',
     description:
-      'Read-only whole-account strategy planner that combines account snapshot, stock strategy screening, option strategy screening, target allocation, risk caps, and staged deployment into a single decision package.',
+      'Read-only whole-account strategy planner that combines account snapshot, stock strategy screening, option strategy screening, target allocation, options thesis sleeves, risk caps, and staged deployment into a single decision package.',
     risk: 'read',
     examples: [
       {
@@ -340,15 +342,25 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         maxSingleNamePercent: 10,
         maxOptionsRiskPercent: 5,
         riskBudgetPercentPerIdea: 1,
+        optionTheses: [
+          {
+            name: 'AI infrastructure momentum',
+            symbols: ['NVDA', 'MU'],
+            role: 'tactical_momentum',
+            horizon: 'swing',
+            preferredStructures: ['debit_spread', 'put_credit_spread'],
+          },
+        ],
       },
     ],
     identifierFormats: ['AccountKey'],
     safetyNotes: [
       'Read-only planning. Does not call precheck or place orders.',
       'Uses staged deployment by default; it may leave cash undeployed when candidates do not fit the risk rules.',
+      'Uses guardrailed options sizing by default; explicit optionTheses and optionsMode=user_driven are required for high-conviction concentration.',
       'Not investment advice; output is decision support based on available Saxo and optional external data.',
     ],
-    keywords: ['portfolio', 'allocation', 'strategy', 'whole account', 'cash deployment', 'stocks', 'options'],
+    keywords: ['portfolio', 'allocation', 'strategy', 'whole account', 'cash deployment', 'stocks', 'options', 'leaps', 'thesis'],
   },
   {
     id: 'saxo_list_accounts',

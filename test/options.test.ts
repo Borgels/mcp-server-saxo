@@ -113,6 +113,47 @@ describe('options tools', () => {
     expect(result.Data.every(plan => (plan.maxLoss ?? 0) <= 600)).toBe(true);
     expect(result.Data.every(plan => plan.strategy !== 'cash_secured_put')).toBe(true);
   });
+
+  it('generates long-call plans for conviction-style defined premium risk', async () => {
+    const fetchMock = optionFetchMock();
+    const client = testClient(fetchMock);
+
+    const result = await planOptionStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        keywords: 'AAPL',
+        strategies: ['long_call'],
+        maxCandidates: 3,
+        minOpenInterest: 10,
+        maxSpreadPercent: 25,
+        includeVolatilityContext: false,
+        externalContext: {
+          sentiment: 'bullish',
+          technicalBias: 'bullish',
+        },
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.Data.length).toBeGreaterThan(0);
+    expect(result.Data.every(plan => plan.strategy === 'long_call')).toBe(true);
+    expect(result.Data[0]).toMatchObject({
+      orderSide: 'Buy',
+      estimatedDebit: expect.any(Number),
+      maxLoss: expect.any(Number),
+      greeks: expect.objectContaining({
+        delta: expect.any(Number),
+        theta: expect.any(Number),
+        thetaDailyPercentOfRisk: expect.any(Number),
+      }),
+      singleLegPrecheckInput: expect.objectContaining({
+        BuySell: 'Buy',
+        AssetType: 'StockOption',
+      }),
+    });
+    expect(result.Data[0]?.maxProfit).toBeUndefined();
+  });
 });
 
 function testClient(fetchMock: typeof fetch): SaxoClient {
@@ -279,6 +320,12 @@ function optionPrice(Uic: number) {
       IsMarketOpen: true,
       OpenInterest: quote.oi,
       ShortTradeDisabled: false,
+    },
+    Greeks: {
+      Delta: quote.symbol.includes('C') ? 0.45 : -0.35,
+      Gamma: 0.03,
+      Theta: quote.symbol.includes('C') ? -0.04 : -0.03,
+      Vega: 0.12,
     },
     LastUpdated: '2026-01-01T12:00:00.000Z',
     PriceInfoDetails: {

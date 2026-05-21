@@ -168,6 +168,7 @@ const optionStrategySchema = z.enum([
   'cash_secured_put',
   'put_credit_spread',
   'call_credit_spread',
+  'long_call',
   'debit_spread',
   'iron_condor',
 ]);
@@ -212,6 +213,20 @@ const portfolioObjectiveSchema = z.enum([
   'growth',
 ]);
 const deploymentStyleSchema = z.enum(['staged', 'immediate', 'watchlist']);
+const optionsModeSchema = z.enum(['guardrailed', 'user_driven']);
+const optionThesisRoleSchema = z.enum(['core_conviction', 'tactical_momentum', 'income', 'hedge', 'speculative']);
+const optionThesisHorizonSchema = z.enum(['short_term', 'swing', 'long_term', 'leaps']);
+const optionPortfolioStructureSchema = z.enum([
+  'cash_secured_put',
+  'put_credit_spread',
+  'call_credit_spread',
+  'long_call',
+  'debit_spread',
+  'iron_condor',
+  'covered_call',
+  'collar',
+  'diagonal',
+]);
 
 const marketNewsContextSchema = z.object({
   source: z.enum(['alpha_vantage', 'external']).default('external'),
@@ -364,11 +379,26 @@ const portfolioStrategySchema = z.object({
   maxSingleNamePercent: z.number().positive().max(100).default(10),
   maxSectorPercent: z.number().positive().max(100).default(35),
   maxOptionsRiskPercent: z.number().min(0).max(100).default(5),
+  maxThesisRiskPercent: z.number().positive().max(100).optional(),
+  maxSingleTradeRiskPercent: z.number().positive().max(100).optional(),
   riskBudgetPercentPerIdea: z.number().positive().max(100).default(1),
+  optionsMode: optionsModeSchema.default('guardrailed'),
   includeStocks: z.boolean().default(true),
   includeOptions: z.boolean().default(true),
   stockSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
   optionSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
+  optionTheses: z.array(z.object({
+    name: z.string().trim().min(1).max(120),
+    symbols: z.array(z.string().trim().min(1)).min(1).max(20),
+    role: optionThesisRoleSchema.optional(),
+    conviction: z.enum(['low', 'medium', 'high']).optional(),
+    directionalBias: directionalBiasSchema.optional(),
+    horizon: optionThesisHorizonSchema.optional(),
+    preferredStructures: z.array(optionPortfolioStructureSchema).min(1).max(10).optional(),
+    targetRiskPercent: z.number().positive().max(100).optional(),
+    maxRiskDollars: z.number().positive().optional(),
+    notes: z.string().trim().max(2000).optional(),
+  })).max(20).optional(),
   maxStockIdeas: z.number().int().min(1).max(25).default(8),
   maxOptionIdeas: z.number().int().min(1).max(25).default(6),
   includeNewsContext: z.boolean().default(false),

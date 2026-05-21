@@ -11,6 +11,13 @@ import {
   type ScreenStockStrategiesResult,
   type StockStrategyObjective,
 } from './stock-strategy-screener.js';
+import {
+  buildOptionPortfolioPlan,
+  type OptionsMode,
+  type OptionsPortfolioPlan,
+  type OptionsRiskDashboard,
+  type OptionThesisInput,
+} from './option-portfolio-planner.js';
 
 export type PortfolioObjective = 'balanced_growth_income' | 'income_options' | 'capital_preservation' | 'growth';
 export type DeploymentStyle = 'staged' | 'immediate' | 'watchlist';
@@ -25,11 +32,15 @@ export interface PlanPortfolioStrategyInput {
   maxSingleNamePercent?: number;
   maxSectorPercent?: number;
   maxOptionsRiskPercent?: number;
+  maxThesisRiskPercent?: number;
+  maxSingleTradeRiskPercent?: number;
   riskBudgetPercentPerIdea?: number;
+  optionsMode?: OptionsMode;
   includeStocks?: boolean;
   includeOptions?: boolean;
   stockSymbols?: string[];
   optionSymbols?: string[];
+  optionTheses?: OptionThesisInput[];
   maxStockIdeas?: number;
   maxOptionIdeas?: number;
   includeNewsContext?: boolean;
@@ -47,7 +58,10 @@ export interface PortfolioStrategyResult {
     maxSingleNamePercent: number;
     maxSectorPercent: number;
     maxOptionsRiskPercent: number;
+    maxThesisRiskPercent?: number;
+    maxSingleTradeRiskPercent?: number;
     riskBudgetPercentPerIdea: number;
+    optionsMode: OptionsMode;
     includeStocks: boolean;
     includeOptions: boolean;
   };
@@ -111,6 +125,8 @@ export interface PortfolioStrategyResult {
     rationale: string;
     warnings: string[];
   }>;
+  optionsPortfolioPlan?: OptionsPortfolioPlan;
+  optionsRiskDashboard?: OptionsRiskDashboard;
   decisionBriefs: Array<{
     rank: number;
     type: 'stock' | 'option' | 'portfolio';
@@ -139,6 +155,13 @@ export async function planPortfolioStrategy(
   const maxSingleNamePercent = clampNumber(input.maxSingleNamePercent ?? 10, 0.1, 100);
   const maxSectorPercent = clampNumber(input.maxSectorPercent ?? 35, 1, 100);
   const maxOptionsRiskPercent = clampNumber(input.maxOptionsRiskPercent ?? 5, 0, 100);
+  const optionsMode = input.optionsMode ?? 'guardrailed';
+  const maxThesisRiskPercent = input.maxThesisRiskPercent === undefined
+    ? undefined
+    : clampNumber(input.maxThesisRiskPercent, 0.01, 100);
+  const maxSingleTradeRiskPercent = input.maxSingleTradeRiskPercent === undefined
+    ? undefined
+    : clampNumber(input.maxSingleTradeRiskPercent, 0.01, 100);
   const riskBudgetPercentPerIdea = clampNumber(input.riskBudgetPercentPerIdea ?? 1, 0.01, 100);
   const includeStocks = input.includeStocks ?? true;
   const includeOptions = input.includeOptions ?? true;
@@ -164,11 +187,22 @@ export async function planPortfolioStrategy(
   const optionScreen = includeOptions
     ? await screenOptionStrategies(client, {
       accountKey: input.accountKey,
-      symbols: input.optionSymbols,
-      playbook: objective === 'income_options' ? 'income_30_60d' : 'quality_put_write',
+      symbols: resolveOptionSymbols(input.optionSymbols, input.optionTheses),
+      playbook: input.optionTheses?.length
+        ? 'leaps_replacement'
+        : objective === 'income_options'
+          ? 'income_30_60d'
+          : 'quality_put_write',
       riskProfile,
-      maxPlans: maxOptionIdeas,
-      maxSymbolsToPlan: Math.min(5, maxOptionIdeas),
+      strategies: input.optionTheses?.length
+        ? ['long_call', 'debit_spread', 'put_credit_spread', 'call_credit_spread', 'cash_secured_put', 'iron_condor']
+        : undefined,
+      minDte: input.optionTheses?.length ? 7 : undefined,
+      maxDte: input.optionTheses?.length ? 730 : undefined,
+      minOpenInterest: input.optionTheses?.length ? 0 : undefined,
+      maxSpreadPercent: input.optionTheses?.length ? 75 : undefined,
+      maxPlans: input.optionTheses?.length ? Math.min(25, Math.max(maxOptionIdeas * 3, maxOptionIdeas)) : maxOptionIdeas,
+      maxSymbolsToPlan: Math.min(10, Math.max(5, maxOptionIdeas, input.optionTheses?.flatMap(thesis => thesis.symbols).length ?? 0)),
       includeAccountContext: true,
       riskBudgetPercent: riskBudgetPercentPerIdea,
       maxPortfolioRiskPercent: maxOptionsRiskPercent,
@@ -204,7 +238,21 @@ export async function planPortfolioStrategy(
     maxSingleNameDollars: netValue ? netValue * maxSingleNamePercent / 100 : undefined,
     stockTargetDollars,
   });
-  const optionAllocationPlan = buildOptionAllocationPlan(optionScreen);
+  const { optionsPortfolioPlan, optionsRiskDashboard } = buildOptionPortfolioPlan({
+    accountContext,
+    deploymentStyle,
+    maxOptionIdeas,
+    maxOptionsRiskPercent,
+    maxSingleTradeRiskPercent,
+    maxThesisRiskPercent,
+    netValue,
+    optionScreen,
+    optionTheses: input.optionTheses,
+    optionsMode,
+    riskBudgetPercentPerIdea,
+    stockAllocations: stockAllocationPlan,
+  });
+  const optionAllocationPlan = buildOptionAllocationPlan(optionScreen, optionsPortfolioPlan);
   const plannedStockNotional = sum(stockAllocationPlan.map(item => item.notional ?? 0));
   const plannedOptionRisk = sum(optionAllocationPlan.map(item => item.plannedRisk ?? 0));
   const unallocatedStockTarget = Math.max(0, stockTargetDollars - plannedStockNotional);
@@ -234,7 +282,10 @@ export async function planPortfolioStrategy(
       maxSingleNamePercent,
       maxSectorPercent,
       maxOptionsRiskPercent,
+      maxThesisRiskPercent,
+      maxSingleTradeRiskPercent,
       riskBudgetPercentPerIdea,
+      optionsMode,
       includeStocks,
       includeOptions,
     },
@@ -270,6 +321,8 @@ export async function planPortfolioStrategy(
     },
     stockAllocationPlan,
     optionAllocationPlan,
+    optionsPortfolioPlan,
+    optionsRiskDashboard,
     decisionBriefs: buildPortfolioBriefs(stockScreen, optionScreen, riskDashboardWarnings, stockAllocationPlan, optionAllocationPlan),
     stockScreen,
     optionScreen,
@@ -586,7 +639,21 @@ function summarizeSectorExposure(
 
 function buildOptionAllocationPlan(
   optionScreen: ScreenOptionStrategiesResult | undefined,
+  optionsPortfolioPlan?: OptionsPortfolioPlan,
 ): PortfolioStrategyResult['optionAllocationPlan'] {
+  if (optionsPortfolioPlan) {
+    return optionsPortfolioPlan.selectedCandidates.map(candidate => ({
+      rank: candidate.rank,
+      symbol: candidate.symbol,
+      strategy: candidate.strategy,
+      verdict: candidate.verdict,
+      confidence: candidate.confidence,
+      recommendedContracts: candidate.recommendedContracts,
+      plannedRisk: roundMoney(candidate.plannedRisk),
+      rationale: candidate.rationale,
+      warnings: candidate.warnings,
+    }));
+  }
   return (optionScreen?.Data ?? [])
     .map(plan => {
       const brief = optionScreen?.decisionBriefs.find(item => item.rank === plan.rank && item.symbol === plan.symbol);
@@ -614,6 +681,14 @@ function buildOptionAllocationPlan(
         warnings: item.plan.keyRisks?.slice(0, 4) ?? [],
       };
     });
+}
+
+function resolveOptionSymbols(symbols: string[] | undefined, theses: OptionThesisInput[] | undefined): string[] | undefined {
+  const all = [
+    ...(symbols ?? []),
+    ...(theses?.flatMap(thesis => thesis.symbols) ?? []),
+  ].map(symbol => symbol.trim()).filter(Boolean);
+  return all.length ? Array.from(new Set(all)) : undefined;
 }
 
 function riskDashboardNotes(input: {

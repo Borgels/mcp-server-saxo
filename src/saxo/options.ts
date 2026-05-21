@@ -10,6 +10,7 @@ export type OptionStrategyKind =
   | 'cash_secured_put'
   | 'put_credit_spread'
   | 'call_credit_spread'
+  | 'long_call'
   | 'debit_spread'
   | 'iron_condor';
 
@@ -203,10 +204,20 @@ interface StrategyLeg {
   uic: number;
   bid?: number;
   ask?: number;
+  greeks?: Record<string, number>;
   mid?: number;
   openInterest?: number;
   quoteSpreadPercent?: number;
   toOpenClose: 'ToOpen';
+}
+
+export interface StrategyGreeks {
+  delta?: number;
+  gamma?: number;
+  theta?: number;
+  vega?: number;
+  thetaDailyPercentOfRisk?: number;
+  thetaDailyPercentOfMaxProfit?: number;
 }
 
 export interface OptionStrategyPlan {
@@ -230,6 +241,7 @@ export interface OptionStrategyPlan {
   maxProfit?: number;
   maxLoss?: number;
   breakevens: number[];
+  greeks?: StrategyGreeks;
   collateralRequired?: number;
   legs: StrategyLeg[];
   multilegPrecheckInput?: unknown;
@@ -371,6 +383,9 @@ export async function planOptionStrategy(
     const contracts = expiry.contracts.filter(contract =>
       isUsableContract(contract, minOpenInterest, maxSpreadPercent),
     );
+    if (strategies.includes('long_call')) {
+      plans.push(...buildLongCalls(contracts, chain, expiry.daysToExpiry, effectiveInput));
+    }
     if (strategies.includes('cash_secured_put')) {
       plans.push(...buildCashSecuredPuts(contracts, chain, expiry.daysToExpiry, effectiveInput));
     }
@@ -743,6 +758,42 @@ function buildCashSecuredPuts(
   });
 }
 
+function buildLongCalls(
+  contracts: OptionContract[],
+  chain: OptionChainResult,
+  daysToExpiry: number,
+  input: PlanOptionStrategyInput,
+): OptionStrategyPlan[] {
+  const underlying = chain.optionRoot.underlyingPrice;
+  const calls = contracts
+    .filter(contract => contract.putCall === 'Call')
+    .filter(contract => !underlying || moneynessDistance(contract, underlying) <= 35);
+
+  return calls.map(call => {
+    const debit = call.ask ?? call.mid ?? 0;
+    const maxLoss = debit * chain.optionRoot.contractSize;
+    const plan = basePlan('long_call', [leg(call, 'Buy')], chain, daysToExpiry, input, {
+      estimatedDebit: debit,
+      maxLoss,
+      breakevens: [call.strikePrice + debit],
+      orderSide: 'Buy',
+      thesis: 'Buy a call option to express bullish convexity with defined premium risk and uncapped upside before expiry.',
+    });
+    plan.singleLegPrecheckInput = {
+      AccountKey: input.accountKey,
+      Uic: call.uic,
+      AssetType: 'StockOption',
+      BuySell: 'Buy',
+      Amount: 1,
+      OrderType: 'Limit',
+      OrderPrice: roundPrice(debit),
+      OrderDuration: { DurationType: 'DayOrder' },
+      ManualOrder: true,
+    };
+    return plan;
+  });
+}
+
 function buildPutCreditSpreads(
   contracts: OptionContract[],
   chain: OptionChainResult,
@@ -953,10 +1004,12 @@ function basePlan(
   },
 ): OptionStrategyPlan {
   const liquidity = scoreLiquidity(legs);
+  const greeks = aggregateStrategyGreeks(legs, chain.optionRoot.contractSize, economics);
   const structure = scoreStructure(strategy, economics, chain.optionRoot.underlyingPrice, daysToExpiry);
   const context = scoreContext(strategy, input);
-  const total = roundScore(liquidity * 0.35 + structure * 0.35 + context * 0.3);
-  const warnings = collectPlanWarnings(legs, economics);
+  const greekScore = scoreGreekRisk(strategy, greeks);
+  const total = roundScore(liquidity * 0.3 + structure * 0.3 + context * 0.25 + greekScore * 0.15);
+  const warnings = collectPlanWarnings(legs, economics, strategy, greeks, daysToExpiry);
   const orderPrice = economics.estimatedCredit ?? economics.estimatedDebit ?? 0;
   const plan: OptionStrategyPlan = {
     rank: 0,
@@ -979,6 +1032,7 @@ function basePlan(
     maxProfit: economics.maxProfit === undefined ? undefined : roundMoney(economics.maxProfit),
     maxLoss: economics.maxLoss === undefined ? undefined : roundMoney(economics.maxLoss),
     breakevens: economics.breakevens.map(roundPrice),
+    greeks,
     collateralRequired:
       economics.collateralRequired === undefined ? undefined : roundMoney(economics.collateralRequired),
     legs,
@@ -1016,11 +1070,83 @@ function leg(contract: OptionContract, buySell: 'Buy' | 'Sell'): StrategyLeg {
     uic: contract.uic,
     bid: contract.bid,
     ask: contract.ask,
+    greeks: contract.greeks,
     mid: contract.mid,
     openInterest: contract.openInterest,
     quoteSpreadPercent: contract.quoteSpreadPercent,
     toOpenClose: 'ToOpen',
   };
+}
+
+function aggregateStrategyGreeks(
+  legs: StrategyLeg[],
+  contractSize: number,
+  economics: { maxLoss?: number; maxProfit?: number },
+): StrategyGreeks | undefined {
+  const delta = aggregateGreek(legs, 'delta', contractSize);
+  const gamma = aggregateGreek(legs, 'gamma', contractSize);
+  const theta = aggregateGreek(legs, 'theta', contractSize);
+  const vega = aggregateGreek(legs, 'vega', contractSize);
+  if ([delta, gamma, theta, vega].every(value => value === undefined)) {
+    return undefined;
+  }
+  return {
+    delta: roundGreek(delta),
+    gamma: roundGreek(gamma),
+    theta: roundGreek(theta),
+    vega: roundGreek(vega),
+    thetaDailyPercentOfRisk: percentOf(theta, economics.maxLoss),
+    thetaDailyPercentOfMaxProfit: percentOf(theta, economics.maxProfit),
+  };
+}
+
+function aggregateGreek(legs: StrategyLeg[], name: 'delta' | 'gamma' | 'theta' | 'vega', contractSize: number): number | undefined {
+  let found = false;
+  let total = 0;
+  for (const legItem of legs) {
+    const value = readGreek(legItem.greeks, name);
+    if (value === undefined) {
+      continue;
+    }
+    found = true;
+    const sign = legItem.buySell === 'Buy' ? 1 : -1;
+    total += sign * value * legItem.amount * contractSize;
+  }
+  return found ? total : undefined;
+}
+
+function readGreek(greeks: Record<string, number> | undefined, name: 'delta' | 'gamma' | 'theta' | 'vega'): number | undefined {
+  if (!greeks) {
+    return undefined;
+  }
+  const entry = Object.entries(greeks).find(([key]) => key.toLowerCase() === name);
+  const value = entry?.[1];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function percentOf(value: number | undefined, base: number | undefined): number | undefined {
+  if (value === undefined || base === undefined || base <= 0) {
+    return undefined;
+  }
+  return roundPrice(Math.abs(value) / base * 100);
+}
+
+function roundGreek(value: number | undefined): number | undefined {
+  return value === undefined || !Number.isFinite(value) ? undefined : Math.round(value * 10_000) / 10_000;
+}
+
+function scoreGreekRisk(strategy: OptionStrategyKind, greeks: StrategyGreeks | undefined): number {
+  if (!greeks || greeks.theta === undefined) {
+    return 60;
+  }
+  const thetaDrag = greeks.theta < 0 ? (greeks.thetaDailyPercentOfRisk ?? 0) : 0;
+  if (strategy === 'long_call' || strategy === 'debit_spread') {
+    return roundScore(scaleDown(thetaDrag, 0.25, 3));
+  }
+  if (strategy === 'cash_secured_put' || strategy === 'put_credit_spread' || strategy === 'call_credit_spread' || strategy === 'iron_condor') {
+    return greeks.theta >= 0 ? 85 : roundScore(scaleDown(thetaDrag, 0.25, 2));
+  }
+  return 60;
 }
 
 function scoreLiquidity(legs: StrategyLeg[]): number {
@@ -1039,6 +1165,17 @@ function scoreStructure(
   underlyingPrice: number | undefined,
   daysToExpiry: number,
 ): number {
+  if (strategy === 'long_call') {
+    const dteScore = scaleUp(daysToExpiry, 90, 540);
+    const debit = economics.estimatedDebit ?? 0;
+    const distanceScore =
+      underlyingPrice && economics.breakevens.length
+        ? Math.min(...economics.breakevens.map(value => Math.abs(value - underlyingPrice) / underlyingPrice * 100))
+        : 25;
+    const breakevenScore = scaleDown(distanceScore, 0, 35);
+    const premiumScore = underlyingPrice ? scaleDown(debit / underlyingPrice * 100, 1, 35) : 50;
+    return roundScore(dteScore * 0.35 + breakevenScore * 0.4 + premiumScore * 0.25);
+  }
   const dteScore = scaleDown(Math.abs(daysToExpiry - 35), 0, 35);
   const rr =
     economics.maxProfit && economics.maxLoss && economics.maxLoss > 0
@@ -1077,7 +1214,7 @@ function scoreDirectionalContext(strategy: OptionStrategyKind, bias: Directional
     return strategy === 'iron_condor' ? 75 : 55;
   }
   if (bias === 'bullish') {
-    return strategy === 'cash_secured_put' || strategy === 'put_credit_spread' || strategy === 'debit_spread'
+    return strategy === 'cash_secured_put' || strategy === 'put_credit_spread' || strategy === 'debit_spread' || strategy === 'long_call'
       ? 75
       : 35;
   }
@@ -1092,7 +1229,7 @@ function scoreVolatilityContext(
     return undefined;
   }
   if (regime === 'low') {
-    if (strategy === 'debit_spread') {
+    if (strategy === 'debit_spread' || strategy === 'long_call') {
       return 85;
     }
     if (strategy === 'cash_secured_put') {
@@ -1107,9 +1244,9 @@ function scoreVolatilityContext(
     if (strategy === 'cash_secured_put') {
       return 65;
     }
-    return 20;
+    return strategy === 'long_call' ? 35 : 20;
   }
-  return strategy === 'debit_spread' ? 60 : 70;
+  return strategy === 'debit_spread' || strategy === 'long_call' ? 60 : 70;
 }
 
 function scoreNewsContext(
@@ -1124,7 +1261,7 @@ function scoreNewsContext(
     return strategy === 'iron_condor' ? 70 : 55;
   }
   if (sentiment === 'bullish') {
-    return strategy === 'cash_secured_put' || strategy === 'put_credit_spread' || strategy === 'debit_spread'
+    return strategy === 'cash_secured_put' || strategy === 'put_credit_spread' || strategy === 'debit_spread' || strategy === 'long_call'
       ? sentimentAlignedScore(technicalBias, 'bullish')
       : 35;
   }
@@ -1146,6 +1283,9 @@ function sentimentAlignedScore(technicalBias: DirectionalBias, sentimentBias: Di
 function collectPlanWarnings(
   legs: StrategyLeg[],
   economics: { estimatedCredit?: number; estimatedDebit?: number; maxLoss?: number },
+  strategy: OptionStrategyKind,
+  greeks: StrategyGreeks | undefined,
+  daysToExpiry: number,
 ): string[] {
   const warnings: string[] = [];
   if (legs.some(item => (item.quoteSpreadPercent ?? 0) > 20)) {
@@ -1159,6 +1299,13 @@ function collectPlanWarnings(
   }
   if ((economics.maxLoss ?? 0) <= 0) {
     warnings.push('Max loss could not be estimated reliably.');
+  }
+  if (!greeks) {
+    warnings.push('Saxo Greeks were unavailable; theta, delta, gamma, and vega risk were not included in scoring.');
+  } else if ((strategy === 'long_call' || strategy === 'debit_spread') && (greeks.thetaDailyPercentOfRisk ?? 0) > 1) {
+    warnings.push(`Theta drag is high for this long-premium structure (${greeks.thetaDailyPercentOfRisk}% of max risk per day).`);
+  } else if (daysToExpiry <= 14 && Math.abs(greeks.gamma ?? 0) > 20) {
+    warnings.push('Short-dated gamma exposure is elevated; size and exits need extra discipline.');
   }
   return warnings;
 }
