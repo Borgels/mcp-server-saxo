@@ -339,6 +339,12 @@ long calls and debit spreads are penalized when theta decay is large relative
 to max risk. Set `requireGreeks=true` to reject candidates when Saxo does not
 return complete delta, gamma, theta, and vega, and use
 `maxThetaDailyPercentOfRisk` to cap acceptable daily decay.
+Option screener candidates also include deterministic `riskAnalytics` with
+realized-volatility expected move, vol-scaled stop/target spot levels, touch
+probabilities, and expected days-to-touch estimates. These are driftless model
+estimates for decision support, not forecasts. When max profit/loss and touch
+levels are available, `riskAnalytics.modelExpectedValue` adds a simple EV
+estimate using explicit payoff assumptions.
 
 Use `saxo_plan_portfolio_strategy` for whole-account deployment. It reads the
 account snapshot, runs the stock and option screeners, then returns target
@@ -405,6 +411,9 @@ current price action as `enter`, `scale_in`, `wait`, or `avoid` using the
 underlying price, breakeven, SMA20/SMA50 distance, 5d/20d returns, and recent
 average range. This lets the planner distinguish a buyable pullback from a
 technical breakdown before sizing tranches.
+Selected option candidates also carry `followUpRules` derived from the active
+playbook, including profit-take percent, soft vol-scaled stop, time stop, and
+trim-vs-close review threshold.
 For an options-only account, set `includeStocks=false`; the planner then keeps
 stock sleeves at zero and treats the options risk budget as the deployable
 account sleeve instead of a small satellite. Use `maxCashDollars` when the cash
@@ -437,6 +446,17 @@ and P/L, and evaluates deterministic profit-taking/loss rules. Option
 strategies additionally include Greeks, theta, DTE, roll, and close rules. It
 returns verdicts such as `hold`, `review`, `consider_trim`, `consider_close`,
 and `roll_watch`; execution remains a separate explicit order workflow.
+For option strategies, snapshots may include `playbook`, `openedDte`,
+`softStopSpot`, `hardStopPercentOfEntryValue`, `timeStopDte`, and
+`profitTakeReviewWhenDteRemainingPercent`. The review tool keeps old
+percent-of-cost/max-risk rules working, but playbook-aware snapshots evaluate
+hard value stops, soft vol-scaled spot stops, time stops, and long-dated
+profit targets separately.
+When a winner reaches its profit threshold, review output includes
+`dteFractionElapsed`, `profitVelocity`, `suggestedTrim`,
+`suggestedStopRaiseLevel`, and, when contract counts allow it, an indicative
+`suggestedTrimOrderDraft` for a multi-leg `ToClose` limit order. The draft is
+for precheck/refresh, not a stale-price execution instruction.
 
 ## Tools
 

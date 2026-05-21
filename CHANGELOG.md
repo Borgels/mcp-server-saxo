@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Deterministic strategy risk analytics for option screeners and portfolio
+  candidates, including realized-volatility expected moves, vol-scaled
+  stop/target levels, touch probabilities, and playbook-derived follow-up
+  rules.
+- Strategy review support for playbook-aware option exits: hard value stops,
+  soft vol-scaled spot stops, time stops, adjusted long-dated profit targets,
+  and trim-vs-close thresholds.
+- DTE-aware review trim output with profit velocity, suggested trim sizing,
+  stop-raise levels, indicative close-order drafts, expected remaining profit,
+  and regret-asymmetry flags where inputs are available.
+- Expected-move and ATR estimates in stock and review technical context.
+
 ## [0.2.2] - 2026-05-21
 
 ### Added

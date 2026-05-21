@@ -17,6 +17,7 @@ import type {
   RiskProfile,
   SizingVerdict,
 } from './option-strategy-screener.js';
+import { buildStrategyRiskAnalytics } from './strategy-risk-analytics.js';
 
 export type StockStrategyObjective =
   | 'core_growth'
@@ -80,6 +81,12 @@ export interface StockTechnicalContext {
     distanceToSma50Percent?: number;
     annualizedVolatilityPercent?: number;
     averageRange14dPercent?: number;
+    expectedMoveHorizonDays?: number;
+    expectedMove1Sigma?: number;
+    expectedMove1SigmaPercent?: number;
+    expectedMove2Sigma?: number;
+    expectedMove2SigmaPercent?: number;
+    atr14Estimate?: number;
   };
 }
 
@@ -1163,6 +1170,12 @@ function analyzeTechnicalContext(
   const distanceToSma50Percent = lastClose && sma50 ? (lastClose - sma50) / sma50 * 100 : undefined;
   const annualizedVolatilityPercent = realizedVolatility(closes);
   const averageRange14dPercent = averageRangePercent(bars.slice(-14));
+  const riskAnalytics = buildStrategyRiskAnalytics({
+    annualizedVolatilityPercent,
+    averageRange14dPercent,
+    dte: 30,
+    spot: lastClose,
+  });
   const bias = inferTechnicalBias({ distanceToSma20Percent, distanceToSma50Percent, return20dPercent, sma20, sma50 });
 
   return {
@@ -1187,6 +1200,12 @@ function analyzeTechnicalContext(
       distanceToSma50Percent: round(distanceToSma50Percent),
       annualizedVolatilityPercent: round(annualizedVolatilityPercent),
       averageRange14dPercent: round(averageRange14dPercent),
+      expectedMoveHorizonDays: 30,
+      expectedMove1Sigma: riskAnalytics.expectedMove1Sigma,
+      expectedMove1SigmaPercent: riskAnalytics.expectedMove1SigmaPercent,
+      expectedMove2Sigma: riskAnalytics.expectedMove2Sigma,
+      expectedMove2SigmaPercent: riskAnalytics.expectedMove2SigmaPercent,
+      atr14Estimate: riskAnalytics.atr14Estimate,
     },
   };
 }

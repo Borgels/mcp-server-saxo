@@ -95,6 +95,18 @@ describe('screenOptionStrategies', () => {
       impliedVolatilityRank: 82,
     });
     expect(result.Data[0]?.screeningContext?.metrics.return20dPercent).toBeGreaterThan(0);
+    expect(result.Data[0]?.riskAnalytics).toMatchObject({
+      model: 'driftless_brownian_touch_approximation',
+      expectedMove1Sigma: expect.any(Number),
+      suggestedStopSpot: expect.any(Number),
+      expectedTouchProbabilityToStop: expect.any(Number),
+      modelExpectedValue: expect.objectContaining({
+        estimatedValue: expect.any(Number),
+      }),
+    });
+    expect(result.Data[0]?.screeningContext?.metrics.expectedMove1Sigma).toEqual(
+      result.Data[0]?.riskAnalytics?.expectedMove1Sigma,
+    );
     const chartCall = fetchMock.mock.calls.find(call => String(call[0]).includes('/chart/v3/charts'));
     expect(chartCall).toBeTruthy();
     const optionsChainCall = fetchMock.mock.calls.find(call =>
@@ -340,6 +352,16 @@ describe('screenOptionStrategies', () => {
       addRule: expect.any(String),
       invalidateRule: expect.any(String),
       rationale: expect.arrayContaining([expect.any(String)]),
+    });
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.riskAnalytics).toMatchObject({
+      expectedMove1Sigma: expect.any(Number),
+      suggestedStopSpot: expect.any(Number),
+    });
+    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.followUpRules).toMatchObject({
+      playbook: result.optionScreen?.filters.playbook,
+      profitTakePercentOfMaxProfit: expect.any(Number),
+      timeStopDte: expect.any(Number),
+      softStopSpot: expect.any(Number),
     });
     expect(result.optionsRiskDashboard).toMatchObject({
       maxOptionsRiskDollars: 20_000,

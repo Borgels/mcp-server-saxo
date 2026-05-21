@@ -5,6 +5,11 @@ import type {
   ScreenOptionStrategiesResult,
 } from './option-strategy-screener.js';
 import type { OptionStrategyKind } from './options.js';
+import {
+  playbookRiskDefaults,
+  type StrategyRiskAnalytics,
+  type StrategyRiskPlaybook,
+} from './strategy-risk-analytics.js';
 
 export type OptionsMode = 'guardrailed' | 'user_driven';
 export type OptionThesisRole = 'core_conviction' | 'tactical_momentum' | 'income' | 'hedge' | 'speculative';
@@ -86,6 +91,14 @@ export interface OptionPortfolioSelectedCandidate {
   };
   expiry?: string;
   daysToExpiry?: number;
+  riskAnalytics?: StrategyRiskAnalytics;
+  followUpRules?: {
+    playbook?: StrategyRiskPlaybook;
+    profitTakePercentOfMaxProfit?: number;
+    softStopSpot?: number;
+    timeStopDte?: number;
+    profitTakeReviewWhenDteRemainingPercent?: number;
+  };
   entryTiming: {
     verdict: 'enter' | 'scale_in' | 'wait' | 'avoid';
     underlyingPrice?: number;
@@ -314,10 +327,12 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
           : undefined,
         expiry: plan.expiry,
         daysToExpiry: plan.daysToExpiry,
+        riskAnalytics: plan.riskAnalytics,
+        followUpRules: buildFollowUpRules(plan, input.optionScreen?.filters.playbook),
         entryTiming: entryTiming(plan),
         rationale: explainSelection(plan, thesis),
         deploymentRule: deploymentRule(plan, thesis, input.deploymentStyle),
-        exitRule: exitRule(plan),
+        exitRule: exitRule(plan, input.optionScreen?.filters.playbook),
         warnings: Array.from(new Set([
           ...(plan.keyRisks ?? []),
           ...plan.warnings,
@@ -573,14 +588,31 @@ function deploymentRule(plan: OptionPlan, thesis: ReturnType<typeof normalizeThe
   return 'Open only if live executable quote is at or better than the screened debit/credit and no catalyst risk has changed.';
 }
 
-function exitRule(plan: OptionPlan): string {
+function exitRule(plan: OptionPlan, playbook: StrategyRiskPlaybook | undefined): string {
+  const defaults = playbookRiskDefaults(playbook);
+  const stop = plan.riskAnalytics?.suggestedStopSpot;
+  const target = plan.riskAnalytics?.suggestedProfitTakeSpot;
   if (plan.estimatedCredit !== undefined) {
-    return 'For short-premium structures, consider taking profit around 40-60% of max credit or closing if the short strike is threatened.';
+    return `For short-premium structures, consider taking profit around ${defaults.profitTakePercentOfMaxProfit}% of max credit or closing if the short strike/vol stop is threatened${stop !== undefined ? ` near ${stop}` : ''}.`;
   }
   if (plan.strategy === 'long_call') {
-    return 'Reassess on thesis break, material IV expansion/decay, or if theta decay starts consuming too much of remaining expected reward.';
+    return `Reassess on thesis break${stop !== undefined ? ` near ${stop}` : ''}, material IV expansion/decay, or if theta decay starts consuming too much of remaining expected reward.`;
   }
-  return 'For debit spreads, reassess below breakeven and consider trimming near 60-80% of max profit.';
+  return `For debit spreads, reassess below the vol/strike stop${stop !== undefined ? ` near ${stop}` : ''} and consider trimming around ${defaults.profitTakePercentOfMaxProfit}% of max profit${target !== undefined ? ` or near spot ${target}` : ''}.`;
+}
+
+function buildFollowUpRules(
+  plan: OptionPlan,
+  playbook: StrategyRiskPlaybook | undefined,
+): OptionPortfolioSelectedCandidate['followUpRules'] {
+  const defaults = playbookRiskDefaults(playbook);
+  return {
+    playbook,
+    profitTakePercentOfMaxProfit: defaults.profitTakePercentOfMaxProfit,
+    softStopSpot: plan.riskAnalytics?.suggestedStopSpot,
+    timeStopDte: defaults.timeStopDte,
+    profitTakeReviewWhenDteRemainingPercent: defaults.profitTakeReviewWhenDteRemainingPercent,
+  };
 }
 
 function buildDeploymentRules(style: BuildOptionPortfolioPlanInput['deploymentStyle']): string[] {

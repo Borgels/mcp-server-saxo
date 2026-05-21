@@ -41,6 +41,12 @@ describe('screenStockStrategies', () => {
         sizingVerdict: 'pass',
         maxRiskBudget: 1_000,
       });
+      expect(result.Data[0]?.technicalContext?.metrics).toMatchObject({
+        expectedMoveHorizonDays: 30,
+        expectedMove1Sigma: expect.any(Number),
+        expectedMove2Sigma: expect.any(Number),
+        atr14Estimate: expect.any(Number),
+      });
       expect(result.decisionBriefs[0]).toMatchObject({
         symbol: 'AAA',
         verdict: expect.stringMatching(/pass|watchlist/),
