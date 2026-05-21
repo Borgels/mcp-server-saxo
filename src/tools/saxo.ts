@@ -392,6 +392,13 @@ const portfolioStrategySchema = z.object({
   optionsMode: optionsModeSchema.default('guardrailed'),
   includeStocks: z.boolean().default(true),
   includeOptions: z.boolean().default(true),
+  discoverOptionCandidates: z.boolean().default(false),
+  optionDiscoveryUniverse: underlyingUniverseSchema.optional(),
+  optionDiscoveryPreset: z.enum(['top_gainers', 'top_losers', 'premarket_gainers', 'premarket_losers']).optional(),
+  optionDiscoveryPlaybook: strategyPlaybookSchema.optional(),
+  optionDiscoveryMaxUnderlyings: z.number().int().min(1).max(50).optional(),
+  optionDiscoveryMaxSymbolsToPlan: z.number().int().min(1).max(10).optional(),
+  optionDiscoveryTargetRiskPercent: z.number().positive().max(100).optional(),
   stockSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
   optionSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
   optionTheses: z.array(z.object({

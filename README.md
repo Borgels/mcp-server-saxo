@@ -356,6 +356,9 @@ conviction risk:
   "riskBudgetPercentPerIdea": 1,
   "requireGreeks": true,
   "maxThetaDailyPercentOfRisk": 1,
+  "discoverOptionCandidates": true,
+  "optionDiscoveryUniverse": "auto",
+  "optionDiscoveryPlaybook": "long_term_directional",
   "optionTheses": [
     {
       "name": "Long-term stock replacement",
@@ -389,6 +392,10 @@ starter-sized. The risk dashboard reports `deployableCashDollars`,
 `cashReserveDollars`, `unallocatedOptionBudget`, and warns when a strict
 options-only plan leaves material cash undeployed because no additional
 Greek-backed candidates fit the current rules.
+Set `discoverOptionCandidates=true` to blend user-supplied conviction theses
+with a deterministic discovery sleeve from Saxo's market mover and option
+screeners. Discovery candidates are still filtered by liquidity, Greeks, theta,
+account sizing, and the same portfolio risk caps.
 
 ## Tools
 

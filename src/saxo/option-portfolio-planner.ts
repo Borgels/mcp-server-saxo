@@ -37,6 +37,9 @@ export interface StockAllocationCandidate {
 export interface BuildOptionPortfolioPlanInput {
   accountContext?: AccountScreeningContext;
   cashReserveDollars?: number;
+  discoverOptionCandidates?: boolean;
+  discoveryTargetRiskPercent?: number;
+  discoveryThesisName?: string;
   deploymentStyle: 'staged' | 'immediate' | 'watchlist';
   maxOptionIdeas: number;
   maxOptionsRiskPercent: number;
@@ -337,8 +340,9 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
 }
 
 function normalizeTheses(input: BuildOptionPortfolioPlanInput): Array<Required<Omit<OptionThesisInput, 'targetRiskPercent' | 'maxRiskDollars' | 'notes'>> & Pick<OptionThesisInput, 'targetRiskPercent' | 'maxRiskDollars' | 'notes'>> {
+  const discoveredSymbols = uniqueSymbols(input.optionScreen?.Data.map(plan => plan.symbol) ?? []);
   if (input.optionTheses?.length) {
-    return input.optionTheses.map((thesis, index) => ({
+    const explicit = input.optionTheses.map((thesis, index) => ({
       name: thesis.name || `Thesis ${index + 1}`,
       symbols: uniqueSymbols(thesis.symbols),
       role: thesis.role ?? 'core_conviction',
@@ -350,9 +354,31 @@ function normalizeTheses(input: BuildOptionPortfolioPlanInput): Array<Required<O
       maxRiskDollars: thesis.maxRiskDollars,
       notes: thesis.notes,
     })).filter(thesis => thesis.symbols.length > 0);
+    if (!input.discoverOptionCandidates) {
+      return explicit;
+    }
+    const explicitSymbols = new Set(explicit.flatMap(thesis => thesis.symbols));
+    const discoverySymbols = discoveredSymbols.filter(symbol => !explicitSymbols.has(symbol));
+    if (!discoverySymbols.length) {
+      return explicit;
+    }
+    return [
+      ...explicit,
+      {
+        name: input.discoveryThesisName ?? 'Discovered option candidates',
+        symbols: discoverySymbols,
+        role: 'tactical_momentum',
+        conviction: 'medium',
+        directionalBias: 'bullish',
+        horizon: 'swing',
+        preferredStructures: ['debit_spread', 'put_credit_spread', 'call_credit_spread'],
+        targetRiskPercent: input.discoveryTargetRiskPercent,
+        maxRiskDollars: undefined,
+        notes: 'Automatically discovered from Saxo market and option screens; still subject to the same risk, liquidity, and Greeks gates.',
+      },
+    ];
   }
-  const symbols = uniqueSymbols(input.optionScreen?.Data.map(plan => plan.symbol) ?? []);
-  return symbols.map(symbol => ({
+  return discoveredSymbols.map(symbol => ({
     name: `${symbol} options satellite`,
     symbols: [symbol],
     role: 'tactical_momentum',

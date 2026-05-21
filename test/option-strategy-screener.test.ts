@@ -448,6 +448,44 @@ describe('screenOptionStrategies', () => {
     expect(result.riskDashboard.warnings.join(' ')).toContain('Options-only plan leaves material cash');
   });
 
+  it('can combine explicit option theses with discovered option candidates', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        discoverOptionCandidates: true,
+        optionDiscoveryUniverse: 'bullish_movers',
+        optionDiscoveryMaxSymbolsToPlan: 2,
+        optionDiscoveryTargetRiskPercent: 10,
+        maxOptionIdeas: 4,
+        optionTheses: [
+          {
+            name: 'AAA conviction',
+            symbols: ['AAA'],
+            role: 'core_conviction',
+            horizon: 'swing',
+            preferredStructures: ['debit_spread'],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.optionScreen?.underlyings.some(item => item.source === 'market_screener')).toBe(true);
+    expect(result.optionsPortfolioPlan?.sleeves).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        thesisName: 'Discovered option candidates',
+        symbols: expect.arrayContaining(['BBB']),
+        targetRisk: 5_000,
+      }),
+    ]));
+    expect(result.optionsPortfolioPlan?.selectedCandidates.some(candidate => candidate.symbol === 'BBB')).toBe(true);
+  });
+
   it('keeps option-root failures visible as rejected portfolio candidates', async () => {
     const client = testClient(strategyScreenerFetchMock());
 

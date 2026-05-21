@@ -5,7 +5,10 @@ import {
   type DecisionVerdict,
   type RiskProfile,
   type ScreenOptionStrategiesResult,
+  type StrategyPlaybook,
+  type UnderlyingUniverse,
 } from './option-strategy-screener.js';
+import type { MarketScreenPreset } from './screener.js';
 import {
   screenStockStrategies,
   type ScreenStockStrategiesResult,
@@ -41,6 +44,13 @@ export interface PlanPortfolioStrategyInput {
   optionsMode?: OptionsMode;
   includeStocks?: boolean;
   includeOptions?: boolean;
+  discoverOptionCandidates?: boolean;
+  optionDiscoveryUniverse?: UnderlyingUniverse;
+  optionDiscoveryPreset?: MarketScreenPreset;
+  optionDiscoveryPlaybook?: StrategyPlaybook;
+  optionDiscoveryMaxUnderlyings?: number;
+  optionDiscoveryMaxSymbolsToPlan?: number;
+  optionDiscoveryTargetRiskPercent?: number;
   stockSymbols?: string[];
   optionSymbols?: string[];
   optionTheses?: OptionThesisInput[];
@@ -70,6 +80,13 @@ export interface PortfolioStrategyResult {
     optionsMode: OptionsMode;
     includeStocks: boolean;
     includeOptions: boolean;
+    discoverOptionCandidates: boolean;
+    optionDiscoveryUniverse?: UnderlyingUniverse;
+    optionDiscoveryPreset?: MarketScreenPreset;
+    optionDiscoveryPlaybook?: StrategyPlaybook;
+    optionDiscoveryMaxUnderlyings?: number;
+    optionDiscoveryMaxSymbolsToPlan?: number;
+    optionDiscoveryTargetRiskPercent?: number;
   };
   portfolioSnapshot: {
     accountContextAvailable: boolean;
@@ -179,6 +196,7 @@ export async function planPortfolioStrategy(
     : clampNumber(input.maxThetaDailyPercentOfRisk, 0, 100);
   const includeStocks = input.includeStocks ?? true;
   const includeOptions = input.includeOptions ?? true;
+  const discoverOptionCandidates = input.discoverOptionCandidates ?? false;
   const maxStockIdeas = clampInt(input.maxStockIdeas ?? 8, 1, 25);
   const maxOptionIdeas = clampInt(input.maxOptionIdeas ?? 6, 1, 25);
   const warnings: string[] = [];
@@ -199,32 +217,20 @@ export async function planPortfolioStrategy(
     : undefined;
 
   const optionScreen = includeOptions
-    ? await screenOptionStrategies(client, {
-      accountKey: input.accountKey,
-      symbols: resolveOptionSymbols(input.optionSymbols, input.optionTheses),
-      playbook: input.optionTheses?.length
-        ? 'leaps_replacement'
-        : objective === 'income_options'
-          ? 'income_30_60d'
-          : 'quality_put_write',
-      riskProfile,
-      strategies: input.optionTheses?.length
-        ? ['long_call', 'debit_spread', 'put_credit_spread', 'call_credit_spread', 'cash_secured_put', 'iron_condor']
-        : undefined,
-      minDte: input.optionTheses?.length ? 7 : undefined,
-      maxDte: input.optionTheses?.length ? 730 : undefined,
-      minOpenInterest: input.optionTheses?.length ? 0 : undefined,
-      maxSpreadPercent: input.optionTheses?.length ? 75 : undefined,
-      maxPlans: input.optionTheses?.length ? Math.min(25, Math.max(maxOptionIdeas * 3, maxOptionIdeas)) : maxOptionIdeas,
-      maxSymbolsToPlan: Math.min(10, Math.max(5, maxOptionIdeas, input.optionTheses?.flatMap(thesis => thesis.symbols).length ?? 0)),
-      includeAccountContext: true,
-      riskBudgetPercent: riskBudgetPercentPerIdea,
-      maxPortfolioRiskPercent: maxOptionsRiskPercent,
-      maxSymbolExposurePercent: maxSingleNamePercent,
-      requireGreeks,
-      maxThetaDailyPercentOfRisk,
+    ? await screenPortfolioOptions(client, {
+      discoverOptionCandidates,
       includeNewsContext: input.includeNewsContext ?? false,
-    }, now)
+      input,
+      maxOptionIdeas,
+      maxOptionsRiskPercent,
+      maxSingleNamePercent,
+      maxThetaDailyPercentOfRisk,
+      objective,
+      requireGreeks,
+      riskBudgetPercentPerIdea,
+      riskProfile,
+      now,
+    })
     : undefined;
 
   warnings.push(...(stockScreen?.warnings ?? []), ...(optionScreen?.warnings ?? []));
@@ -269,6 +275,8 @@ export async function planPortfolioStrategy(
     netValue,
     optionScreen,
     optionTheses: input.optionTheses,
+    discoverOptionCandidates,
+    discoveryTargetRiskPercent: input.optionDiscoveryTargetRiskPercent,
     optionsMode,
     riskBudgetPercentPerIdea,
     stockAllocations: stockAllocationPlan,
@@ -320,6 +328,13 @@ export async function planPortfolioStrategy(
       optionsMode,
       includeStocks,
       includeOptions,
+      discoverOptionCandidates,
+      optionDiscoveryUniverse: input.optionDiscoveryUniverse,
+      optionDiscoveryPreset: input.optionDiscoveryPreset,
+      optionDiscoveryPlaybook: input.optionDiscoveryPlaybook,
+      optionDiscoveryMaxUnderlyings: input.optionDiscoveryMaxUnderlyings,
+      optionDiscoveryMaxSymbolsToPlan: input.optionDiscoveryMaxSymbolsToPlan,
+      optionDiscoveryTargetRiskPercent: input.optionDiscoveryTargetRiskPercent,
     },
     portfolioSnapshot: {
       accountContextAvailable: accountContext?.available ?? false,
@@ -364,6 +379,169 @@ export async function planPortfolioStrategy(
     optionScreen,
     warnings: Array.from(new Set(warnings)),
   };
+}
+
+async function screenPortfolioOptions(
+  client: SaxoClient,
+  options: {
+    discoverOptionCandidates: boolean;
+    includeNewsContext: boolean;
+    input: PlanPortfolioStrategyInput;
+    maxOptionIdeas: number;
+    maxOptionsRiskPercent: number;
+    maxSingleNamePercent: number;
+    maxThetaDailyPercentOfRisk?: number;
+    objective: PortfolioObjective;
+    requireGreeks: boolean;
+    riskBudgetPercentPerIdea: number;
+    riskProfile: RiskProfile;
+    now: Date;
+  },
+): Promise<ScreenOptionStrategiesResult> {
+  const explicitSymbols = resolveOptionSymbols(options.input.optionSymbols, options.input.optionTheses);
+  const explicitScreen = explicitSymbols?.length
+    ? await screenOptionStrategies(client, {
+      ...baseOptionScreenInput(options),
+      symbols: explicitSymbols,
+      playbook: explicitOptionPlaybook(options.input, options.objective),
+      strategies: options.input.optionTheses?.length
+        ? ['long_call', 'debit_spread', 'put_credit_spread', 'call_credit_spread', 'cash_secured_put', 'iron_condor']
+        : undefined,
+      minDte: options.input.optionTheses?.length ? 7 : undefined,
+      maxDte: options.input.optionTheses?.length ? 730 : undefined,
+      minOpenInterest: options.input.optionTheses?.length ? 0 : undefined,
+      maxSpreadPercent: options.input.optionTheses?.length ? 75 : undefined,
+      maxPlans: options.input.optionTheses?.length
+        ? Math.min(25, Math.max(options.maxOptionIdeas * 3, options.maxOptionIdeas))
+        : options.maxOptionIdeas,
+      maxSymbolsToPlan: Math.min(10, Math.max(5, options.maxOptionIdeas, explicitSymbols.length)),
+    }, options.now)
+    : undefined;
+
+  const shouldRunDiscovery = options.discoverOptionCandidates || !explicitSymbols?.length;
+  const discoveryScreen = shouldRunDiscovery
+    ? await screenOptionStrategies(client, {
+      ...baseOptionScreenInput(options),
+      playbook: options.input.optionDiscoveryPlaybook ?? discoveryOptionPlaybook(options.objective, options.riskProfile),
+      underlyingUniverse: options.input.optionDiscoveryUniverse ?? 'auto',
+      underlyingPreset: options.input.optionDiscoveryPreset,
+      maxUnderlyings: options.input.optionDiscoveryMaxUnderlyings ?? 50,
+      maxSymbolsToPlan: options.input.optionDiscoveryMaxSymbolsToPlan ?? Math.min(10, Math.max(5, options.maxOptionIdeas)),
+      maxPlans: Math.min(25, Math.max(options.maxOptionIdeas * 3, options.maxOptionIdeas)),
+    }, options.now)
+    : undefined;
+
+  return mergeOptionScreens(explicitScreen, discoveryScreen);
+}
+
+function baseOptionScreenInput(options: {
+  includeNewsContext: boolean;
+  input: PlanPortfolioStrategyInput;
+  maxOptionsRiskPercent: number;
+  maxSingleNamePercent: number;
+  maxThetaDailyPercentOfRisk?: number;
+  requireGreeks: boolean;
+  riskBudgetPercentPerIdea: number;
+  riskProfile: RiskProfile;
+}): Parameters<typeof screenOptionStrategies>[1] {
+  return {
+    accountKey: options.input.accountKey,
+    riskProfile: options.riskProfile,
+    includeAccountContext: true,
+    riskBudgetPercent: options.riskBudgetPercentPerIdea,
+    maxPortfolioRiskPercent: options.maxOptionsRiskPercent,
+    maxSymbolExposurePercent: options.maxSingleNamePercent,
+    requireGreeks: options.requireGreeks,
+    maxThetaDailyPercentOfRisk: options.maxThetaDailyPercentOfRisk,
+    includeNewsContext: options.includeNewsContext,
+  };
+}
+
+function explicitOptionPlaybook(input: PlanPortfolioStrategyInput, objective: PortfolioObjective): StrategyPlaybook {
+  if (input.optionTheses?.length) {
+    return 'leaps_replacement';
+  }
+  return objective === 'income_options' ? 'income_30_60d' : 'quality_put_write';
+}
+
+function discoveryOptionPlaybook(objective: PortfolioObjective, riskProfile: RiskProfile): StrategyPlaybook {
+  if (objective === 'income_options') {
+    return 'income_30_60d';
+  }
+  if (objective === 'growth' || riskProfile === 'aggressive') {
+    return 'long_term_directional';
+  }
+  return 'quality_put_write';
+}
+
+function mergeOptionScreens(
+  explicitScreen: ScreenOptionStrategiesResult | undefined,
+  discoveryScreen: ScreenOptionStrategiesResult | undefined,
+): ScreenOptionStrategiesResult {
+  if (explicitScreen && !discoveryScreen) return explicitScreen;
+  if (!explicitScreen && discoveryScreen) return discoveryScreen;
+  if (!explicitScreen || !discoveryScreen) {
+    throw new Error('Option screening produced no explicit or discovery result.');
+  }
+
+  const data = dedupeOptionPlans([...explicitScreen.Data, ...discoveryScreen.Data]);
+  return {
+    ...explicitScreen,
+    warnings: Array.from(new Set([...explicitScreen.warnings, ...discoveryScreen.warnings])),
+    underlyings: dedupeUnderlyings([...explicitScreen.underlyings, ...discoveryScreen.underlyings]),
+    accountContext: explicitScreen.accountContext ?? discoveryScreen.accountContext,
+    decisionBriefs: dedupeDecisionBriefs([...explicitScreen.decisionBriefs, ...discoveryScreen.decisionBriefs]),
+    Data: data,
+    counters: {
+      underlyingsConsidered: explicitScreen.counters.underlyingsConsidered + discoveryScreen.counters.underlyingsConsidered,
+      symbolsPlanned: explicitScreen.counters.symbolsPlanned + discoveryScreen.counters.symbolsPlanned,
+      symbolsSkipped: explicitScreen.counters.symbolsSkipped + discoveryScreen.counters.symbolsSkipped,
+      rawPlans: explicitScreen.counters.rawPlans + discoveryScreen.counters.rawPlans,
+      returnedPlans: data.length,
+    },
+  };
+}
+
+function dedupeOptionPlans(plans: ScreenOptionStrategiesResult['Data']): ScreenOptionStrategiesResult['Data'] {
+  const seen = new Set<string>();
+  const deduped: ScreenOptionStrategiesResult['Data'] = [];
+  for (const plan of plans) {
+    const key = `${plan.symbol}:${plan.strategy}:${plan.expiry}:${plan.legs.map(leg => leg.uic).join(',')}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(plan);
+  }
+  return deduped;
+}
+
+function dedupeUnderlyings(items: ScreenOptionStrategiesResult['underlyings']): ScreenOptionStrategiesResult['underlyings'] {
+  const seen = new Set<string>();
+  const deduped: ScreenOptionStrategiesResult['underlyings'] = [];
+  for (const item of items) {
+    const key = `${item.source}:${item.symbol}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
+function dedupeDecisionBriefs(items: ScreenOptionStrategiesResult['decisionBriefs']): ScreenOptionStrategiesResult['decisionBriefs'] {
+  const seen = new Set<string>();
+  const deduped: ScreenOptionStrategiesResult['decisionBriefs'] = [];
+  for (const item of items) {
+    const key = `${item.symbol}:${item.rank}:${item.tradeSummary}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(item);
+  }
+  return deduped;
 }
 
 function buildTargetAllocation(input: {

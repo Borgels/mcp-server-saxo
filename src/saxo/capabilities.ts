@@ -348,6 +348,9 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         riskBudgetPercentPerIdea: 1,
         requireGreeks: true,
         maxThetaDailyPercentOfRisk: 1,
+        discoverOptionCandidates: true,
+        optionDiscoveryUniverse: 'auto',
+        optionDiscoveryPlaybook: 'long_term_directional',
         optionTheses: [
           {
             name: 'AI infrastructure momentum',
@@ -365,6 +368,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Uses staged deployment by default; it may leave cash undeployed when candidates do not fit the risk rules.',
       'Uses guardrailed options sizing by default; explicit optionTheses and optionsMode=user_driven are required for high-conviction concentration.',
       'Set includeStocks=false for an options-only account; stock allocation targets then stay at zero.',
+      'Set discoverOptionCandidates=true to blend explicit option theses with a deterministic Saxo market/option screener discovery sleeve.',
       'Set requireGreeks=true for options-only or aggressive accounts so candidates without complete Saxo Greeks are rejected instead of merely warned.',
       'For options-only immediate plans, contract counts scale up to configured thesis, trade, and cash-reserve budgets; staged plans remain starter-sized.',
       'Risk dashboard reports cash reserve, deployable cash, unallocated option budget, and warnings when strict filters leave material cash undeployed.',
