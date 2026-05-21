@@ -111,10 +111,11 @@ Environment variables required:
 
 function openBrowser(url: string): void {
   // On Windows `start` is a cmd builtin, not an executable, so we have to go
-  // through the shell. On macOS/Linux we exec `open` / `xdg-open` directly.
+  // through a URL handler. Avoid `cmd /c start`: OAuth URLs contain `&`, and
+  // cmd treats that as a command separator unless quoting is exactly right.
   const isWindows = process.platform === 'win32';
-  const command = isWindows ? 'cmd' : process.platform === 'darwin' ? 'open' : 'xdg-open';
-  const args = isWindows ? ['/c', 'start', '""', url] : [url];
+  const command = isWindows ? 'rundll32.exe' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+  const args = isWindows ? ['url.dll,FileProtocolHandler', url] : [url];
   try {
     const child = spawn(command, args, { stdio: 'ignore', detached: true });
     // spawn() emits ENOENT asynchronously via 'error' if the binary is missing —
