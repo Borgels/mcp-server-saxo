@@ -422,6 +422,11 @@ Use `portfolioProfile="concentrated_conviction"` plus
 `maxSelectedUnderlyings`, `minPositionRiskDollars`, `maxContractsPerPosition`,
 and `fragmentationPolicy="reject"` when the account should favor fewer,
 larger, easier-to-monitor option positions instead of many small trades.
+If the Saxo account is not approved for short option legs, set
+`allowShortOptionLegs=false` on option strategy or portfolio planning calls.
+The planner then filters out spreads and short-premium structures that open a
+short option leg and only returns long-only option structures that pass the
+remaining liquidity, Greeks, and theta gates.
 
 Use `saxo_review_strategy_positions` after execution to monitor open stock and
 option strategies against the plan you opened. Pass the executed stock leg or
@@ -571,6 +576,7 @@ A copy of `policy.example.json` is included. Supported fields:
 | --- | --- |
 | `allow_live_writes` | Master switch for all order writes on LIVE. |
 | `require_precheck_on_live` | Place-order automatically runs precheck first. |
+| `allow_short_option_legs` | Set to `false` when the Saxo option profile does not permit opening short option legs; multi-leg write tools then block sell-to-open option legs before calling Saxo. |
 | `allowed_asset_types` | Whitelist of AssetTypes that may be ordered. |
 | `allowed_account_keys` | Whitelist of AccountKeys that may be traded. |
 | `denied_uics` | Blocklist of Uics. |

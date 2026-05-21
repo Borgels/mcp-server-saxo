@@ -74,10 +74,12 @@ function formatSaxoHttpError(input: {
   fallbackMessage?: string;
 }): string {
   const payload = isSaxoErrorPayload(input.payload) ? input.payload : undefined;
+  const nested = extractNestedSaxoError(input.payload);
   const parts = [
     `Saxo OpenAPI request failed with HTTP ${input.status}`,
     payload?.ErrorCode ? `ErrorCode=${payload.ErrorCode}` : undefined,
     payload?.Message,
+    nested,
     input.retryAfter ? `retry-after=${input.retryAfter}s` : undefined,
     input.fallbackMessage,
   ].filter(Boolean);
@@ -87,4 +89,38 @@ function formatSaxoHttpError(input: {
 
 function isSaxoErrorPayload(value: unknown): value is SaxoErrorPayload {
   return typeof value === 'object' && value !== null;
+}
+
+function extractNestedSaxoError(value: unknown): string | undefined {
+  const messages = new Set<string>();
+  collectNestedSaxoErrors(value, messages);
+  return messages.size ? Array.from(messages).join(' | ') : undefined;
+}
+
+function collectNestedSaxoErrors(value: unknown, messages: Set<string>): void {
+  if (typeof value !== 'object' || value === null) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectNestedSaxoErrors(item, messages);
+    }
+    return;
+  }
+
+  const record = value as Record<string, unknown>;
+  const errorInfo = record.ErrorInfo;
+  if (typeof errorInfo === 'object' && errorInfo !== null) {
+    const nested = errorInfo as Record<string, unknown>;
+    const code = typeof nested.ErrorCode === 'string' ? nested.ErrorCode : undefined;
+    const message = typeof nested.Message === 'string' ? nested.Message : undefined;
+    if (code || message) {
+      messages.add([code ? `ErrorCode=${code}` : undefined, message].filter(Boolean).join(' | '));
+    }
+  }
+
+  for (const item of Object.values(record)) {
+    collectNestedSaxoErrors(item, messages);
+  }
 }

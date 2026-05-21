@@ -93,6 +93,37 @@ describe('SaxoClient', () => {
     }
   });
 
+  it('surfaces nested Saxo ErrorInfo payloads via SaxoHttpError', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse(
+        {
+          ErrorInfo: {
+            ErrorCode: 'OtherError',
+            Message: 'Your option trading profile does not allow shorting options.',
+          },
+          Orders: [
+            {
+              ErrorInfo: {
+                ErrorCode: 'OtherError',
+                Message: 'Your option trading profile does not allow shorting options.',
+              },
+            },
+          ],
+        },
+        400,
+      ),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(client.post('/trade/v2/orders/multileg', {})).rejects.toThrow(
+      /option trading profile does not allow shorting options/,
+    );
+  });
+
   it('exposes retry-after on 429', async () => {
     const fetchMock = vi.fn<typeof fetch>(async () =>
       jsonResponse(

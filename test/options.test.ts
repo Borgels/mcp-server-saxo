@@ -154,6 +154,33 @@ describe('options tools', () => {
     });
     expect(result.Data[0]?.maxProfit).toBeUndefined();
   });
+
+  it('filters strategies that open short option legs when disabled', async () => {
+    const fetchMock = optionFetchMock();
+    const client = testClient(fetchMock);
+
+    const result = await planOptionStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        keywords: 'AAPL',
+        strategies: ['long_call', 'debit_spread', 'put_credit_spread'],
+        allowShortOptionLegs: false,
+        maxCandidates: 10,
+        minOpenInterest: 10,
+        maxSpreadPercent: 25,
+        includeVolatilityContext: false,
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.Data.length).toBeGreaterThan(0);
+    expect(result.Data.every(plan => plan.strategy === 'long_call')).toBe(true);
+    expect(result.Data.every(plan => plan.legs.every(leg => leg.buySell === 'Buy'))).toBe(true);
+    expect(result.warnings).toEqual(expect.arrayContaining([
+      expect.stringMatching(/allowShortOptionLegs=false/),
+    ]));
+  });
 });
 
 function testClient(fetchMock: typeof fetch): SaxoClient {

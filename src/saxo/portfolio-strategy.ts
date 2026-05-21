@@ -42,6 +42,7 @@ export interface PlanPortfolioStrategyInput {
   maxThesisRiskPercent?: number;
   maxSingleTradeRiskPercent?: number;
   riskBudgetPercentPerIdea?: number;
+  allowShortOptionLegs?: boolean;
   requireGreeks?: boolean;
   maxThetaDailyPercentOfRisk?: number;
   optionsMode?: OptionsMode;
@@ -89,6 +90,7 @@ export interface PortfolioStrategyResult {
     maxThesisRiskPercent?: number;
     maxSingleTradeRiskPercent?: number;
     riskBudgetPercentPerIdea: number;
+    allowShortOptionLegs: boolean;
     requireGreeks: boolean;
     maxThetaDailyPercentOfRisk?: number;
     optionsMode: OptionsMode;
@@ -215,6 +217,7 @@ export async function planPortfolioStrategy(
     ? undefined
     : clampNumber(input.maxSingleTradeRiskPercent, 0.01, 100);
   const riskBudgetPercentPerIdea = clampNumber(input.riskBudgetPercentPerIdea ?? 1, 0.01, 100);
+  const allowShortOptionLegs = input.allowShortOptionLegs ?? true;
   const requireGreeks = input.requireGreeks ?? false;
   const maxThetaDailyPercentOfRisk = input.maxThetaDailyPercentOfRisk === undefined
     ? undefined
@@ -261,6 +264,7 @@ export async function planPortfolioStrategy(
       maxSingleNamePercent,
       maxThetaDailyPercentOfRisk,
       objective,
+      allowShortOptionLegs,
       requireGreeks,
       riskBudgetPercentPerIdea,
       riskProfile,
@@ -364,6 +368,7 @@ export async function planPortfolioStrategy(
       maxThesisRiskPercent,
       maxSingleTradeRiskPercent,
       riskBudgetPercentPerIdea,
+      allowShortOptionLegs,
       requireGreeks,
       maxThetaDailyPercentOfRisk,
       optionsMode,
@@ -443,6 +448,7 @@ async function screenPortfolioOptions(
     maxSingleNamePercent: number;
     maxThetaDailyPercentOfRisk?: number;
     objective: PortfolioObjective;
+    allowShortOptionLegs: boolean;
     requireGreeks: boolean;
     riskBudgetPercentPerIdea: number;
     riskProfile: RiskProfile;
@@ -491,6 +497,7 @@ function baseOptionScreenInput(options: {
   maxOptionsRiskPercent: number;
   maxSingleNamePercent: number;
   maxThetaDailyPercentOfRisk?: number;
+  allowShortOptionLegs: boolean;
   requireGreeks: boolean;
   riskBudgetPercentPerIdea: number;
   riskProfile: RiskProfile;
@@ -502,6 +509,7 @@ function baseOptionScreenInput(options: {
     riskBudgetPercent: options.riskBudgetPercentPerIdea,
     maxPortfolioRiskPercent: options.maxOptionsRiskPercent,
     maxSymbolExposurePercent: options.maxSingleNamePercent,
+    allowShortOptionLegs: options.allowShortOptionLegs,
     requireGreeks: options.requireGreeks,
     maxThetaDailyPercentOfRisk: options.maxThetaDailyPercentOfRisk,
     includeNewsContext: options.includeNewsContext,

@@ -43,6 +43,7 @@ export interface PlanOptionStrategyInput extends GetOptionChainInput {
   strategies?: OptionStrategyKind[];
   maxCandidates?: number;
   riskBudget?: number;
+  allowShortOptionLegs?: boolean;
   requireGreeks?: boolean;
   maxThetaDailyPercentOfRisk?: number;
   minOpenInterest?: number;
@@ -438,8 +439,10 @@ export async function planOptionStrategy(
 
   const { plans: greekFilteredPlans, missingGreeksCount, thetaFilteredCount } = filterByGreekRequirements(prefilteredPlans, input);
   warnings.push(...greekFilterWarnings({ missingGreeksCount, thetaFilteredCount }, input));
+  const { plans: permissionFilteredPlans, shortOptionFilteredCount } = filterByShortOptionPermission(greekFilteredPlans, input);
+  warnings.push(...shortOptionPermissionWarnings({ shortOptionFilteredCount }, input));
 
-  const ranked = greekFilteredPlans
+  const ranked = permissionFilteredPlans
     .sort((a, b) => b.score.total - a.score.total)
     .slice(0, maxCandidates)
     .map((plan, index) => ({ ...plan, rank: index + 1 }));
@@ -1303,6 +1306,21 @@ function filterByGreekRequirements(plans: OptionStrategyPlan[], input: PlanOptio
   return { plans: filtered, missingGreeksCount, thetaFilteredCount };
 }
 
+function filterByShortOptionPermission(plans: OptionStrategyPlan[], input: PlanOptionStrategyInput): {
+  plans: OptionStrategyPlan[];
+  shortOptionFilteredCount: number;
+} {
+  if (input.allowShortOptionLegs !== false) {
+    return { plans, shortOptionFilteredCount: 0 };
+  }
+
+  const filtered = plans.filter(plan => !plan.legs.some(legItem => legItem.buySell === 'Sell'));
+  return {
+    plans: filtered,
+    shortOptionFilteredCount: plans.length - filtered.length,
+  };
+}
+
 function hasCompleteCoreGreeks(greeks: StrategyGreeks | undefined): boolean {
   return greeks?.delta !== undefined &&
     greeks.gamma !== undefined &&
@@ -1325,6 +1343,18 @@ function greekFilterWarnings(
     );
   }
   return warnings;
+}
+
+function shortOptionPermissionWarnings(
+  counts: { shortOptionFilteredCount: number },
+  input: PlanOptionStrategyInput,
+): string[] {
+  if (input.allowShortOptionLegs !== false || counts.shortOptionFilteredCount === 0) {
+    return [];
+  }
+  return [
+    `Filtered ${counts.shortOptionFilteredCount} option candidate(s) because allowShortOptionLegs=false and the strategy opens a short option leg.`,
+  ];
 }
 
 function aggregateStrategyGreeks(

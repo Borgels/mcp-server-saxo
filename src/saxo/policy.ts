@@ -57,6 +57,7 @@ const OAUTH_TOOLS = new Set([
 export interface SaxoPolicy {
   allow_live_writes: boolean;
   require_precheck_on_live: boolean;
+  allow_short_option_legs?: boolean;
   allowed_asset_types?: string[];
   allowed_account_keys?: string[];
   denied_uics?: number[];
@@ -245,6 +246,7 @@ export interface MultiLegPolicyLeg {
   AssetType?: string;
   Amount?: number;
   BuySell?: 'Buy' | 'Sell';
+  ToOpenClose?: 'ToOpen' | 'ToClose';
 }
 
 export interface MultiLegPolicyInput {
@@ -277,6 +279,18 @@ export function checkMultiLegOrder(input: MultiLegPolicyInput, policy: SaxoPolic
           `Leg ${i} AssetType ${leg.AssetType} is not in policy.allowed_asset_types.`,
         );
       }
+    }
+
+    if (
+      policy.allow_short_option_legs === false &&
+      isOptionAssetType(leg.AssetType) &&
+      leg.BuySell === 'Sell' &&
+      leg.ToOpenClose !== 'ToClose'
+    ) {
+      throw new SaxoPolicyDeniedError(
+        'saxo_place_multileg_order',
+        `Leg ${i} opens a short ${leg.AssetType} position, but policy.allow_short_option_legs=false.`,
+      );
     }
 
     if (leg.Uic !== undefined && policy.denied_uics?.length) {
@@ -327,6 +341,13 @@ export function checkMultiLegOrder(input: MultiLegPolicyInput, policy: SaxoPolic
       );
     }
   }
+}
+
+function isOptionAssetType(assetType: string | undefined): boolean {
+  return assetType === 'StockOption' ||
+    assetType === 'IndexOption' ||
+    assetType === 'StockIndexOption' ||
+    assetType === 'FuturesOption';
 }
 
 export function isLiveTradingEnabled(): boolean {

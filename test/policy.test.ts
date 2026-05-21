@@ -249,6 +249,38 @@ describe('Saxo policy.checkMultiLegOrder', () => {
     ).toThrow(SaxoPolicyDeniedError);
   });
 
+  it('rejects opening short option legs when policy disallows them', () => {
+    const policy: SaxoPolicy = { ...DEFAULT_POLICY, allow_short_option_legs: false };
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          OrderPrice: 1.08,
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', BuySell: 'Buy', Amount: 10, ToOpenClose: 'ToOpen' },
+            { Uic: 2, AssetType: 'StockOption', BuySell: 'Sell', Amount: 10, ToOpenClose: 'ToOpen' },
+          ],
+        },
+        policy,
+      ),
+    ).toThrow(/policy\.allow_short_option_legs=false/);
+  });
+
+  it('allows closing short option legs when short option opens are disallowed', () => {
+    const policy: SaxoPolicy = { ...DEFAULT_POLICY, allow_short_option_legs: false };
+    expect(() =>
+      checkMultiLegOrder(
+        {
+          OrderPrice: 1.08,
+          Legs: [
+            { Uic: 1, AssetType: 'StockOption', BuySell: 'Buy', Amount: 10, ToOpenClose: 'ToOpen' },
+            { Uic: 2, AssetType: 'StockOption', BuySell: 'Sell', Amount: 10, ToOpenClose: 'ToClose' },
+          ],
+        },
+        policy,
+      ),
+    ).not.toThrow();
+  });
+
   it('allows write tools on SIM for multi-leg', () => {
     expect(
       checkToolAllowed({

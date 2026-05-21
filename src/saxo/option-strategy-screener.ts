@@ -27,6 +27,7 @@ export interface ScreenOptionStrategiesInput {
   strategies?: OptionStrategyKind[];
   minDte?: number;
   maxDte?: number;
+  allowShortOptionLegs?: boolean;
   maxUnderlyings?: number;
   maxUnderlyingScan?: number;
   maxSymbolsToPlan?: number;
@@ -167,6 +168,7 @@ export interface ScreenOptionStrategiesResult {
     strategies: OptionStrategyKind[];
     minDte: number;
     maxDte: number;
+    allowShortOptionLegs: boolean;
     maxUnderlyings: number;
     maxUnderlyingScan: number;
     maxSymbolsToPlan: number;
@@ -340,6 +342,7 @@ export async function screenOptionStrategies(
   const maxUnderlyingScan = clampInt(input.maxUnderlyingScan ?? 500, maxUnderlyings, 500);
   const maxSymbolsToPlan = clampInt(input.maxSymbolsToPlan ?? 5, 1, 10);
   const maxPlans = clampInt(input.maxPlans ?? 10, 1, 25);
+  const allowShortOptionLegs = input.allowShortOptionLegs ?? true;
   const requireGreeks = input.requireGreeks ?? false;
   const maxThetaDailyPercentOfRisk = input.maxThetaDailyPercentOfRisk;
   const includeAccountContext = input.includeAccountContext ?? true;
@@ -424,6 +427,7 @@ export async function screenOptionStrategies(
         maxDte,
         maxCandidates: Math.min(8, maxPlans),
         riskBudget: input.riskBudget,
+        allowShortOptionLegs,
         requireGreeks,
         maxThetaDailyPercentOfRisk,
         minOpenInterest,
@@ -506,6 +510,7 @@ export async function screenOptionStrategies(
       strategies,
       minDte,
       maxDte,
+      allowShortOptionLegs,
       maxUnderlyings,
       maxUnderlyingScan,
       maxSymbolsToPlan,
