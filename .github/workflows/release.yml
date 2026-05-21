@@ -56,7 +56,7 @@ jobs:
       - run: npm run build
 
       - name: Validate MCPB manifest
-        run: npx mcpb validate manifest.json
+        run: npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb validate manifest.json
 
       - name: Extract release notes from CHANGELOG
         run: |

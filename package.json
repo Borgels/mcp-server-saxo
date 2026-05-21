@@ -25,8 +25,8 @@
     "test": "vitest run",
     "prepack": "npm run typecheck && npm test && npm run build",
     "smoke:live": "tsx test/live-smoke.ts",
-    "mcpb:validate": "mcpb validate manifest.json",
-    "mcpb:pack": "mcpb pack . mcp-server-saxo.mcpb"
+    "mcpb:validate": "npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb validate manifest.json",
+    "mcpb:pack": "npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb pack . mcp-server-saxo.mcpb"
   },
   "repository": {
     "type": "git",
@@ -64,7 +64,6 @@
     "fast-uri": ">=3.1.2"
   },
   "devDependencies": {
-    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^25.9.1",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
