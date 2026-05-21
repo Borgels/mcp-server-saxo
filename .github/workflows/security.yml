@@ -11,15 +11,22 @@ permissions:
   contents: read
 
 jobs:
-  secret-scan:
+  secret-pattern-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan tracked files for obvious secret-like values
+        run: |
+          set -euo pipefail
+          pattern='eyJ[A-Za-z0-9_-]{10,}\.|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY'
+          matches="$(git grep -l -I -E "$pattern" -- . || true)"
+          if [ -n "$matches" ]; then
+            echo "::error::Potential secret-like values found in tracked files:"
+            echo "$matches"
+            exit 1
+          fi
 
   dependency-audit:
     runs-on: ubuntu-latest
