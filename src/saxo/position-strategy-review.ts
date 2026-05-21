@@ -11,6 +11,14 @@ import { contractMultiplier } from './policy.js';
 import { getInfoPricesList } from './prices.js';
 import { getBalance, listOrders, listPositions } from './portfolio.js';
 import { readEnv } from './env.js';
+import {
+  adjustedProfitTakePercent,
+  buildStrategyRiskAnalytics,
+  playbookRiskDefaults,
+  type StrategyDirection,
+  type StrategyRiskAnalytics,
+  type StrategyRiskPlaybook,
+} from './strategy-risk-analytics.js';
 
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
 export type StrategyInstrumentType = 'stock' | 'option' | 'mixed';
@@ -48,6 +56,8 @@ export interface StrategyFollowUpInput {
     entryMaxRisk?: number;
     entryMaxProfit?: number;
     entryUnderlyingPrice?: number;
+    openedDte?: number;
+    playbook?: StrategyRiskPlaybook;
     probabilityOfProfit?: number;
     expectedProfit?: number;
     expectedLoss?: number;
@@ -59,6 +69,12 @@ export interface StrategyFollowUpInput {
       lossExitPercentOfMaxRisk?: number;
       rollWhenDaysToExpiryBelow?: number;
       closeWhenDaysToExpiryBelow?: number;
+      hardStopPercentOfEntryValue?: number;
+      openedDte?: number;
+      playbook?: StrategyRiskPlaybook;
+      profitTakeReviewWhenDteRemainingPercent?: number;
+      softStopSpot?: number;
+      timeStopDte?: number;
       thesisInvalidBelow?: number;
       thesisInvalidAbove?: number;
       maxThetaDailyPercentOfRisk?: number;
@@ -71,6 +87,12 @@ export interface StrategyFollowUpInput {
     lossExitPercentOfMaxRisk?: number;
     rollWhenDaysToExpiryBelow?: number;
     closeWhenDaysToExpiryBelow?: number;
+    hardStopPercentOfEntryValue?: number;
+    openedDte?: number;
+    playbook?: StrategyRiskPlaybook;
+    profitTakeReviewWhenDteRemainingPercent?: number;
+    softStopSpot?: number;
+    timeStopDte?: number;
     thesisInvalidBelow?: number;
     thesisInvalidAbove?: number;
     maxThetaDailyPercentOfRisk?: number;
@@ -142,6 +164,44 @@ export interface StrategyFollowUpResult {
     unrealizedPnL?: number;
     unrealizedPnLPercentOfMaxRisk?: number;
     unrealizedPnLPercentOfMaxProfit?: number;
+    dteFractionElapsed?: number;
+    dteFractionElapsedPercent?: number;
+    profitVelocity?: number;
+    suggestedTrim?: {
+      fractionToClose: number;
+      percentToClose: number;
+      label: string;
+      rationale: string;
+    };
+    suggestedStopRaiseLevel?: number;
+    suggestedTrimOrderDraft?: {
+      AccountKey?: string;
+      OrderDuration: { DurationType: 'DayOrder' };
+      OrderPrice?: number;
+      OrderType: 'Limit';
+      ManualOrder: true;
+      Legs: Array<{
+        Amount: number;
+        AssetType: string;
+        BuySell: 'Buy' | 'Sell';
+        ToOpenClose: 'ToClose';
+        ManualOrder: true;
+        Uic: number;
+      }>;
+      notes: string[];
+    };
+    expectedRemainingProfit?: {
+      estimatedValue?: number;
+      probabilityToTarget?: number;
+      remainingMaxProfit?: number;
+      notes: string[];
+    };
+    regretAsymmetry?: {
+      flag: boolean;
+      dominantAction?: 'trim_and_hold' | 'close_all';
+      estimatedDifference?: number;
+      notes: string[];
+    };
     netGreeks?: {
       delta?: number;
       gamma?: number;
@@ -149,6 +209,7 @@ export interface StrategyFollowUpResult {
       vega?: number;
       thetaDailyPercentOfRisk?: number;
     };
+    riskAnalytics?: StrategyRiskAnalytics;
     technicalContext?: TechnicalReviewContext;
     newsContext?: MarketNewsContext;
     fundamentalsContext?: MarketFundamentalsContext;
@@ -212,6 +273,12 @@ interface TechnicalReviewContext {
     distanceToSma50Percent?: number;
     annualizedVolatilityPercent?: number;
     averageRange14dPercent?: number;
+    expectedMoveHorizonDays?: number;
+    expectedMove1Sigma?: number;
+    expectedMove1SigmaPercent?: number;
+    expectedMove2Sigma?: number;
+    expectedMove2SigmaPercent?: number;
+    atr14Estimate?: number;
   };
 }
 
@@ -324,6 +391,7 @@ export async function reviewStrategyPositions(
 
   const reviews = strategies.map((strategy, index) =>
     reviewOneStrategy(strategy, {
+      accountKey,
       context: contextByIndex.get(index),
       defaultRules,
       now,
@@ -552,6 +620,7 @@ function reviewOneStrategy(
       technicalContext?: TechnicalReviewContext;
     };
     defaultRules?: StrategyFollowUpInput['defaultRules'];
+    accountKey?: string;
     fallbackName: string;
     now: Date;
     openAmountByUic: Map<number, number>;
@@ -559,7 +628,6 @@ function reviewOneStrategy(
     priceByUic: Map<number, InfoPrice>;
   },
 ): StrategyFollowUpResult['reviews'][number] {
-  const rules = { ...context.defaultRules, ...strategy.rules };
   const entryValue = buildEntryValue(strategy);
   const entryMaxRisk = strategy.entryMaxRisk ?? (entryValue !== undefined && entryValue > 0 ? entryValue : undefined);
   const entryMaxProfit = strategy.entryMaxProfit;
@@ -574,6 +642,17 @@ function reviewOneStrategy(
   const netGreeks = aggregateGreeks(strategy.legs, context.priceByUic, entryMaxRisk);
   const expectedValue = expectedValueEstimate(strategy, entryMaxRisk);
   const daysToEarliestExpiry = earliestDte(strategy.legs, context.now);
+  const riskAnalytics = buildReviewRiskAnalytics(strategy, {
+    currentUnderlyingPrice,
+    daysToEarliestExpiry,
+    technicalContext: context.context?.technicalContext,
+  });
+  const rules = buildEffectiveRules({
+    defaultRules: context.defaultRules,
+    daysToEarliestExpiry,
+    riskAnalytics,
+    strategy,
+  });
   const triggeredRules = [
     ...triggeredFollowUpRules({
     currentValue,
@@ -590,6 +669,32 @@ function reviewOneStrategy(
     }),
     ...triggeredContextRules(strategy, context.context),
   ];
+  const dteMetrics = dteProgressMetrics({
+    currentDte: daysToEarliestExpiry,
+    originalDte: rules.openedDte ?? strategy.openedDte,
+    unrealizedPnLPercentOfMaxProfit: percent(unrealizedPnL, entryMaxProfit),
+  });
+  const trimRecommendation = buildTrimRecommendation({
+    accountKey: context.accountKey,
+    currentValue,
+    dteFractionElapsed: dteMetrics.dteFractionElapsed,
+    entryValue,
+    legs,
+    strategy,
+    triggeredRules,
+    unrealizedPnL,
+  });
+  const expectedRemainingProfit = estimateRemainingProfit({
+    currentValue,
+    entryMaxProfit,
+    riskAnalytics,
+    trimFraction: trimRecommendation?.suggestedTrim?.fractionToClose,
+  });
+  const regretAsymmetry = estimateRegretAsymmetry({
+    currentValue,
+    expectedRemainingProfit,
+    trimFraction: trimRecommendation?.suggestedTrim?.fractionToClose,
+  });
   const warnings = [
     openLegsMatched < strategy.legs.length ? 'One or more expected legs were not found in open positions.' : undefined,
     currentValue === undefined ? 'Current close value could not be estimated for all legs.' : undefined,
@@ -614,7 +719,16 @@ function reviewOneStrategy(
     unrealizedPnL: roundMoney(unrealizedPnL),
     unrealizedPnLPercentOfMaxRisk: percent(unrealizedPnL, entryMaxRisk),
     unrealizedPnLPercentOfMaxProfit: percent(unrealizedPnL, entryMaxProfit),
+    dteFractionElapsed: dteMetrics.dteFractionElapsed,
+    dteFractionElapsedPercent: dteMetrics.dteFractionElapsedPercent,
+    profitVelocity: dteMetrics.profitVelocity,
+    suggestedTrim: trimRecommendation?.suggestedTrim,
+    suggestedStopRaiseLevel: trimRecommendation?.suggestedStopRaiseLevel,
+    suggestedTrimOrderDraft: trimRecommendation?.suggestedTrimOrderDraft,
+    expectedRemainingProfit,
+    regretAsymmetry,
     netGreeks,
+    riskAnalytics,
     technicalContext: context.context?.technicalContext,
     newsContext: context.context?.newsContext,
     fundamentalsContext: context.context?.fundamentalsContext,
@@ -656,6 +770,32 @@ function reviewLeg(
   };
 }
 
+function buildEffectiveRules(input: {
+  daysToEarliestExpiry?: number;
+  defaultRules?: StrategyFollowUpInput['defaultRules'];
+  riskAnalytics?: StrategyRiskAnalytics;
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
+}): NonNullable<StrategyFollowUpInput['defaultRules']> {
+  const explicit = { ...input.defaultRules, ...input.strategy.rules };
+  const playbook = explicit.playbook ?? input.strategy.playbook;
+  if (!playbook) {
+    return explicit;
+  }
+  const defaults = playbookRiskDefaults(playbook);
+  return {
+    ...explicit,
+    playbook,
+    openedDte: explicit.openedDte ?? input.strategy.openedDte ?? input.daysToEarliestExpiry,
+    profitTakePercentOfMaxProfit:
+      explicit.profitTakePercentOfMaxProfit ?? defaults.profitTakePercentOfMaxProfit,
+    profitTakeReviewWhenDteRemainingPercent:
+      explicit.profitTakeReviewWhenDteRemainingPercent ?? defaults.profitTakeReviewWhenDteRemainingPercent,
+    hardStopPercentOfEntryValue: explicit.hardStopPercentOfEntryValue ?? 30,
+    softStopSpot: explicit.softStopSpot ?? input.riskAnalytics?.suggestedStopSpot,
+    timeStopDte: explicit.timeStopDte ?? defaults.timeStopDte,
+  };
+}
+
 function triggeredFollowUpRules(input: {
   currentValue?: number;
   currentUnderlyingPrice?: number;
@@ -670,6 +810,7 @@ function triggeredFollowUpRules(input: {
   unrealizedPnL?: number;
 }): string[] {
   const triggered: string[] = [];
+  const originalDte = input.rules.openedDte ?? input.strategy.openedDte;
   if (
     input.rules.profitTakePercentOfCost !== undefined &&
     input.unrealizedPnL !== undefined &&
@@ -679,13 +820,24 @@ function triggeredFollowUpRules(input: {
   ) {
     triggered.push(`Profit target reached: P/L is at least ${input.rules.profitTakePercentOfCost}% of entry cost.`);
   }
+  const adjustedProfitTake = adjustedProfitTakePercent({
+    baseProfitTakePercent: input.rules.profitTakePercentOfMaxProfit,
+    currentDte: input.daysToEarliestExpiry,
+    originalDte,
+  });
   if (
-    input.rules.profitTakePercentOfMaxProfit !== undefined &&
+    adjustedProfitTake !== undefined &&
     input.unrealizedPnL !== undefined &&
     input.entryMaxProfit !== undefined &&
-    input.unrealizedPnL >= input.entryMaxProfit * input.rules.profitTakePercentOfMaxProfit / 100
+    input.unrealizedPnL >= input.entryMaxProfit * adjustedProfitTake / 100
   ) {
-    triggered.push(`Profit target reached: P/L is at least ${input.rules.profitTakePercentOfMaxProfit}% of max profit.`);
+    const elapsed = dteFractionElapsed(input.daysToEarliestExpiry, originalDte);
+    const closeInsteadOfTrim = elapsed !== undefined && elapsed >= 0.75;
+    triggered.push(
+      closeInsteadOfTrim
+        ? `Profit target close: P/L is at least ${adjustedProfitTake}% of max profit with ${roundPercent(elapsed * 100)}% of original DTE elapsed.`
+        : `Profit target trim: P/L is at least ${adjustedProfitTake}% of max profit with ${elapsed === undefined ? 'unknown' : `${roundPercent(elapsed * 100)}%`} of original DTE elapsed.`,
+    );
   }
   if (
     input.rules.lossExitPercentOfCost !== undefined &&
@@ -703,6 +855,36 @@ function triggeredFollowUpRules(input: {
     input.unrealizedPnL <= -input.entryMaxRisk * input.rules.lossExitPercentOfMaxRisk / 100
   ) {
     triggered.push(`Loss rule reached: P/L is below -${input.rules.lossExitPercentOfMaxRisk}% of max risk.`);
+  }
+  if (
+    input.rules.hardStopPercentOfEntryValue !== undefined &&
+    input.currentValue !== undefined &&
+    input.entryValue !== undefined &&
+    input.entryValue > 0 &&
+    input.currentValue <= input.entryValue * input.rules.hardStopPercentOfEntryValue / 100
+  ) {
+    triggered.push(`Hard stop reached: strategy close value is at or below ${input.rules.hardStopPercentOfEntryValue}% of entry value.`);
+  }
+  if (
+    input.rules.softStopSpot !== undefined &&
+    input.currentUnderlyingPrice !== undefined &&
+    softStopTriggered({
+      currentUnderlyingPrice: input.currentUnderlyingPrice,
+      direction: inferStrategyDirection(input.strategy),
+      softStopSpot: input.rules.softStopSpot,
+    })
+  ) {
+    triggered.push(`Soft stop reached: underlying price crossed vol-scaled stop ${input.rules.softStopSpot}.`);
+  }
+  if (
+    input.rules.timeStopDte !== undefined &&
+    input.instrumentType !== 'stock' &&
+    input.daysToEarliestExpiry !== undefined &&
+    input.daysToEarliestExpiry <= input.rules.timeStopDte &&
+    input.unrealizedPnL !== undefined &&
+    input.unrealizedPnL < 0
+  ) {
+    triggered.push(`Time stop reached: ${input.daysToEarliestExpiry} DTE is at or below ${input.rules.timeStopDte} and the strategy is below entry.`);
   }
   if (
     input.rules.thesisInvalidBelow !== undefined &&
@@ -744,6 +926,292 @@ function triggeredFollowUpRules(input: {
     triggered.push(`Theta rule reached: daily theta exceeds ${input.rules.maxThetaDailyPercentOfRisk}% of max risk.`);
   }
   return triggered;
+}
+
+function softStopTriggered(input: {
+  currentUnderlyingPrice: number;
+  direction: StrategyDirection;
+  softStopSpot: number;
+}): boolean {
+  if (input.direction === 'bearish') {
+    return input.currentUnderlyingPrice >= input.softStopSpot;
+  }
+  return input.currentUnderlyingPrice <= input.softStopSpot;
+}
+
+function dteProgressMetrics(input: {
+  currentDte?: number;
+  originalDte?: number;
+  unrealizedPnLPercentOfMaxProfit?: number;
+}): {
+  dteFractionElapsed?: number;
+  dteFractionElapsedPercent?: number;
+  profitVelocity?: number;
+} {
+  const elapsed = dteFractionElapsed(input.currentDte, input.originalDte);
+  const elapsedPercent = elapsed === undefined ? undefined : elapsed * 100;
+  return {
+    dteFractionElapsed: roundRatio(elapsed),
+    dteFractionElapsedPercent: roundPercent(elapsedPercent),
+    profitVelocity:
+      input.unrealizedPnLPercentOfMaxProfit !== undefined && elapsedPercent !== undefined && elapsedPercent > 0
+        ? roundRatio(input.unrealizedPnLPercentOfMaxProfit / elapsedPercent)
+        : undefined,
+  };
+}
+
+function dteFractionElapsed(currentDte: number | undefined, originalDte: number | undefined): number | undefined {
+  if (
+    typeof currentDte !== 'number' ||
+    typeof originalDte !== 'number' ||
+    !Number.isFinite(currentDte) ||
+    !Number.isFinite(originalDte) ||
+    originalDte <= 0
+  ) {
+    return undefined;
+  }
+  return Math.min(1, Math.max(0, (originalDte - currentDte) / originalDte));
+}
+
+function buildTrimRecommendation(input: {
+  accountKey?: string;
+  currentValue?: number;
+  dteFractionElapsed?: number;
+  entryValue?: number;
+  legs: StrategyFollowUpResult['reviews'][number]['legs'];
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
+  triggeredRules: string[];
+  unrealizedPnL?: number;
+}): {
+  suggestedTrim?: NonNullable<StrategyFollowUpResult['reviews'][number]['suggestedTrim']>;
+  suggestedStopRaiseLevel?: number;
+  suggestedTrimOrderDraft?: NonNullable<StrategyFollowUpResult['reviews'][number]['suggestedTrimOrderDraft']>;
+} | undefined {
+  if (!input.triggeredRules.some(rule => rule.startsWith('Profit target trim'))) {
+    return undefined;
+  }
+  const trim = trimFromDteElapsed(input.dteFractionElapsed);
+  const suggestedStopRaiseLevel = stopRaiseLevel({
+    dteFractionElapsed: input.dteFractionElapsed,
+    entryValue: input.entryValue,
+    unrealizedPnL: input.unrealizedPnL,
+  });
+  return {
+    suggestedTrim: trim,
+    suggestedStopRaiseLevel: roundMoney(suggestedStopRaiseLevel),
+    suggestedTrimOrderDraft: buildSuggestedTrimOrderDraft({
+      accountKey: input.accountKey,
+      currentValue: input.currentValue,
+      fractionToClose: trim.fractionToClose,
+      strategy: input.strategy,
+    }),
+  };
+}
+
+function trimFromDteElapsed(dteFractionElapsed: number | undefined): NonNullable<StrategyFollowUpResult['reviews'][number]['suggestedTrim']> {
+  if (dteFractionElapsed === undefined || dteFractionElapsed < 0.25) {
+    return {
+      fractionToClose: 1 / 3,
+      percentToClose: 33.33,
+      label: 'close_one_third',
+      rationale: 'Fast winner early in the holding window; trim one third and keep optionality.',
+    };
+  }
+  if (dteFractionElapsed < 0.5) {
+    return {
+      fractionToClose: 0.5,
+      percentToClose: 50,
+      label: 'close_half',
+      rationale: 'Winner is ahead of time decay; close half and let the rest work.',
+    };
+  }
+  if (dteFractionElapsed < 0.75) {
+    return {
+      fractionToClose: 2 / 3,
+      percentToClose: 66.67,
+      label: 'close_two_thirds',
+      rationale: 'More than half the holding window has elapsed; de-risk most of the position.',
+    };
+  }
+  return {
+    fractionToClose: 1,
+    percentToClose: 100,
+    label: 'close_all',
+    rationale: 'Late-window winner; close instead of trimming.',
+  };
+}
+
+function stopRaiseLevel(input: {
+  dteFractionElapsed?: number;
+  entryValue?: number;
+  unrealizedPnL?: number;
+}): number | undefined {
+  if (input.entryValue === undefined || input.unrealizedPnL === undefined || input.unrealizedPnL <= 0) {
+    return undefined;
+  }
+  const elapsed = input.dteFractionElapsed ?? 0;
+  if (elapsed < 0.25) return input.entryValue;
+  if (elapsed < 0.5) return input.entryValue + input.unrealizedPnL * 0.5;
+  if (elapsed < 0.75) return input.entryValue + input.unrealizedPnL * 0.65;
+  return undefined;
+}
+
+function buildSuggestedTrimOrderDraft(input: {
+  accountKey?: string;
+  currentValue?: number;
+  fractionToClose: number;
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
+}): NonNullable<StrategyFollowUpResult['reviews'][number]['suggestedTrimOrderDraft']> | undefined {
+  if (input.strategy.legs.length < 2) {
+    return undefined;
+  }
+  const legs = input.strategy.legs
+    .map(leg => ({
+      Amount: trimAmount(leg.amount, input.fractionToClose),
+      AssetType: inferLegAssetType(leg),
+      BuySell: closeSide(leg.buySell),
+      ToOpenClose: 'ToClose' as const,
+      ManualOrder: true as const,
+      Uic: leg.uic,
+    }))
+    .filter(leg => leg.Amount > 0);
+  if (legs.length !== input.strategy.legs.length) {
+    return undefined;
+  }
+  return {
+    AccountKey: input.accountKey,
+    OrderDuration: { DurationType: 'DayOrder' },
+    OrderPrice: roundPrice(netOrderPrice(input.strategy, input.currentValue)),
+    OrderType: 'Limit',
+    ManualOrder: true,
+    Legs: legs,
+    notes: [
+      'Indicative trim close draft built from current mid value; refresh quote and run precheck before placing.',
+      'OrderPrice is positive because Saxo infers debit/credit from close-leg directions.',
+    ],
+  };
+}
+
+function netOrderPrice(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  currentValue: number | undefined,
+): number | undefined {
+  const maxAmount = Math.max(...strategy.legs.map(leg => Math.abs(leg.amount)));
+  if (currentValue === undefined || maxAmount <= 0) {
+    return undefined;
+  }
+  return Math.abs(currentValue) / maxAmount / contractMultiplier('StockOption');
+}
+
+function closeSide(buySell: 'Buy' | 'Sell'): 'Buy' | 'Sell' {
+  return buySell === 'Buy' ? 'Sell' : 'Buy';
+}
+
+function trimAmount(amount: number, fractionToClose: number): number {
+  const raw = Math.abs(amount) * fractionToClose;
+  return raw < 1 ? 0 : Math.round(raw);
+}
+
+function estimateRemainingProfit(input: {
+  currentValue?: number;
+  entryMaxProfit?: number;
+  riskAnalytics?: StrategyRiskAnalytics;
+  trimFraction?: number;
+}): StrategyFollowUpResult['reviews'][number]['expectedRemainingProfit'] | undefined {
+  if (input.currentValue === undefined || input.entryMaxProfit === undefined) {
+    return undefined;
+  }
+  const remainingMaxProfit = Math.max(0, input.entryMaxProfit - input.currentValue);
+  const probabilityToTarget = input.riskAnalytics?.expectedTouchProbabilityToTarget;
+  const holdFraction = 1 - (input.trimFraction ?? 0);
+  const estimatedValue = remainingMaxProfit === 0
+    ? 0
+    : probabilityToTarget === undefined
+    ? undefined
+    : remainingMaxProfit * probabilityToTarget / 100 * holdFraction;
+  return {
+    estimatedValue: roundMoney(estimatedValue),
+    probabilityToTarget,
+    remainingMaxProfit: roundMoney(remainingMaxProfit * holdFraction),
+    notes: [
+      'Expected remaining profit is a simplified estimate based on remaining max profit and touch probability.',
+    ],
+  };
+}
+
+function estimateRegretAsymmetry(input: {
+  currentValue?: number;
+  expectedRemainingProfit?: StrategyFollowUpResult['reviews'][number]['expectedRemainingProfit'];
+  trimFraction?: number;
+}): StrategyFollowUpResult['reviews'][number]['regretAsymmetry'] | undefined {
+  if (
+    input.currentValue === undefined ||
+    input.expectedRemainingProfit?.estimatedValue === undefined ||
+    input.trimFraction === undefined
+  ) {
+    return undefined;
+  }
+  const closeAllValue = input.currentValue;
+  const trimAndHoldValue = input.currentValue * input.trimFraction + input.expectedRemainingProfit.estimatedValue;
+  const difference = trimAndHoldValue - closeAllValue;
+  const threshold = Math.max(50, Math.abs(closeAllValue) * 0.1);
+  return {
+    flag: Math.abs(difference) >= threshold,
+    dominantAction: difference >= threshold ? 'trim_and_hold' : difference <= -threshold ? 'close_all' : undefined,
+    estimatedDifference: roundMoney(difference),
+    notes: ['Regret asymmetry compares indicative close-all value with trim-and-hold expected value.'],
+  };
+}
+
+function buildReviewRiskAnalytics(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  input: {
+    currentUnderlyingPrice?: number;
+    daysToEarliestExpiry?: number;
+    technicalContext?: TechnicalReviewContext;
+  },
+): StrategyRiskAnalytics | undefined {
+  const playbook = strategy.rules?.playbook ?? strategy.playbook;
+  const metrics = input.technicalContext?.metrics;
+  const spot = strategy.entryUnderlyingPrice ?? input.currentUnderlyingPrice;
+  if (!playbook && metrics?.annualizedVolatilityPercent === undefined) {
+    return undefined;
+  }
+  return buildStrategyRiskAnalytics({
+    annualizedVolatilityPercent: metrics?.annualizedVolatilityPercent,
+    averageRange14dPercent: metrics?.averageRange14dPercent,
+    direction: inferStrategyDirection(strategy),
+    dte: strategy.rules?.openedDte ?? strategy.openedDte ?? input.daysToEarliestExpiry,
+    longStrike: debitSpreadLongStrike(strategy),
+    maxLoss: strategy.entryMaxRisk,
+    maxProfit: strategy.entryMaxProfit,
+    playbook,
+    spot,
+    stopSpot: strategy.rules?.softStopSpot,
+  });
+}
+
+function inferStrategyDirection(strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number]): StrategyDirection {
+  const name = `${strategy.strategy ?? ''} ${strategy.name ?? ''} ${strategy.thesisName ?? ''}`.toLowerCase();
+  if (name.includes('iron_condor') || name.includes('condor') || name.includes('neutral')) {
+    return 'neutral';
+  }
+  if (name.includes('call_credit') || name.includes('bear') || name.includes('put debit')) {
+    return 'bearish';
+  }
+  if (strategy.legs.some(leg => leg.putCall === 'Put') && strategy.legs.every(leg => leg.putCall !== 'Call') && strategy.legs.some(leg => leg.buySell === 'Buy')) {
+    return 'bearish';
+  }
+  return 'bullish';
+}
+
+function debitSpreadLongStrike(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+): number | undefined {
+  if (strategy.strategy !== 'debit_spread') {
+    return undefined;
+  }
+  return strategy.legs.find(leg => leg.buySell === 'Buy')?.strike;
 }
 
 function triggeredContextRules(
@@ -802,8 +1270,15 @@ function isBearishStrategy(strategy: NonNullable<StrategyFollowUpInput['strategy
 
 function verdictFromRules(triggeredRules: string[], warnings: string[], dte: number | undefined): FollowUpVerdict {
   if (warnings.length) return 'review';
-  if (triggeredRules.some(rule => rule.startsWith('Close watch') || rule.startsWith('Loss rule'))) return 'consider_close';
-  if (triggeredRules.some(rule => rule.startsWith('Profit target'))) return 'consider_trim';
+  if (triggeredRules.some(rule =>
+    rule.startsWith('Close watch') ||
+    rule.startsWith('Loss rule') ||
+    rule.startsWith('Hard stop') ||
+    rule.startsWith('Soft stop') ||
+    rule.startsWith('Time stop') ||
+    rule.startsWith('Profit target close')
+  )) return 'consider_close';
+  if (triggeredRules.some(rule => rule.startsWith('Profit target trim') || rule.startsWith('Profit target reached'))) return 'consider_trim';
   if (triggeredRules.some(rule => rule.startsWith('Roll watch')) || (dte !== undefined && dte <= 14)) return 'roll_watch';
   if (triggeredRules.length) return 'review';
   return 'hold';
@@ -1336,6 +1811,12 @@ function analyzeTechnicalContext(
   const distanceToSma50Percent = lastClose && sma50 ? (lastClose - sma50) / sma50 * 100 : undefined;
   const annualizedVolatilityPercent = realizedVolatility(closes);
   const averageRange14dPercent = averageRangePercent(bars.slice(-14));
+  const riskAnalytics = buildStrategyRiskAnalytics({
+    annualizedVolatilityPercent,
+    averageRange14dPercent,
+    dte: 30,
+    spot: lastClose,
+  });
   const bias = inferTechnicalBias({ distanceToSma20Percent, distanceToSma50Percent, return20dPercent, sma20, sma50 });
   return {
     source: 'saxo_chart',
@@ -1359,6 +1840,12 @@ function analyzeTechnicalContext(
       distanceToSma50Percent: roundMoney(distanceToSma50Percent),
       annualizedVolatilityPercent: roundMoney(annualizedVolatilityPercent),
       averageRange14dPercent: roundMoney(averageRange14dPercent),
+      expectedMoveHorizonDays: 30,
+      expectedMove1Sigma: riskAnalytics.expectedMove1Sigma,
+      expectedMove1SigmaPercent: riskAnalytics.expectedMove1SigmaPercent,
+      expectedMove2Sigma: riskAnalytics.expectedMove2Sigma,
+      expectedMove2SigmaPercent: riskAnalytics.expectedMove2SigmaPercent,
+      atr14Estimate: riskAnalytics.atr14Estimate,
     },
   };
 }
@@ -1582,6 +2069,18 @@ function clampInt(value: number, min: number, max: number): number {
 }
 
 function roundMoney(value: number | undefined): number | undefined {
+  return value === undefined || !Number.isFinite(value) ? undefined : Math.round(value * 100) / 100;
+}
+
+function roundPrice(value: number | undefined): number | undefined {
+  return value === undefined || !Number.isFinite(value) ? undefined : Math.round(value * 10_000) / 10_000;
+}
+
+function roundRatio(value: number | undefined): number | undefined {
+  return value === undefined || !Number.isFinite(value) ? undefined : Math.round(value * 10_000) / 10_000;
+}
+
+function roundPercent(value: number | undefined): number | undefined {
   return value === undefined || !Number.isFinite(value) ? undefined : Math.round(value * 100) / 100;
 }
 

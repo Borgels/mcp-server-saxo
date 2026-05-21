@@ -489,12 +489,18 @@ const portfolioStrategySchema = z.object({
 });
 
 const strategyFollowUpRulesSchema = z.object({
+  playbook: strategyPlaybookSchema.optional(),
   profitTakePercentOfCost: z.number().min(0).max(1000).optional(),
   profitTakePercentOfMaxProfit: z.number().min(0).max(1000).optional(),
   lossExitPercentOfCost: z.number().min(0).max(1000).optional(),
   lossExitPercentOfMaxRisk: z.number().min(0).max(1000).optional(),
   rollWhenDaysToExpiryBelow: z.number().int().min(0).max(3650).optional(),
   closeWhenDaysToExpiryBelow: z.number().int().min(0).max(3650).optional(),
+  hardStopPercentOfEntryValue: z.number().min(0).max(100).optional(),
+  openedDte: z.number().int().min(0).max(3650).optional(),
+  profitTakeReviewWhenDteRemainingPercent: z.number().min(0).max(100).optional(),
+  softStopSpot: z.number().positive().optional(),
+  timeStopDte: z.number().int().min(0).max(3650).optional(),
   thesisInvalidBelow: z.number().optional(),
   thesisInvalidAbove: z.number().optional(),
   maxThetaDailyPercentOfRisk: z.number().min(0).max(100).optional(),
@@ -533,6 +539,8 @@ const strategyPositionReviewSchema = z.object({
     entryMaxRisk: z.number().positive().optional(),
     entryMaxProfit: z.number().positive().optional(),
     entryUnderlyingPrice: z.number().positive().optional(),
+    openedDte: z.number().int().min(0).max(3650).optional(),
+    playbook: strategyPlaybookSchema.optional(),
     probabilityOfProfit: z.number().min(0).max(100).optional(),
     expectedProfit: z.number().min(0).optional(),
     expectedLoss: z.number().min(0).optional(),

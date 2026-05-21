@@ -14,6 +14,11 @@ import {
 } from './market-context.js';
 import { getBalance, listAccounts, listPositions } from './portfolio.js';
 import { type MarketScreenMarket, type MarketScreenPreset, screenMarket } from './screener.js';
+import {
+  buildStrategyRiskAnalytics,
+  type StrategyDirection,
+  type StrategyRiskAnalytics,
+} from './strategy-risk-analytics.js';
 
 export interface ScreenOptionStrategiesInput {
   accountKey: string;
@@ -69,6 +74,11 @@ export interface TechnicalScreeningContext extends ExternalStrategyContext {
     distanceToSma50Percent?: number;
     annualizedVolatilityPercent?: number;
     averageRange14dPercent?: number;
+    expectedMove1Sigma?: number;
+    expectedMove1SigmaPercent?: number;
+    expectedMove2Sigma?: number;
+    expectedMove2SigmaPercent?: number;
+    atr14Estimate?: number;
   };
 }
 
@@ -217,6 +227,7 @@ export interface ScreenOptionStrategiesResult {
       screeningContext?: TechnicalScreeningContext;
       newsContext?: MarketNewsContext;
       effectiveContext?: ExternalStrategyContext;
+      riskAnalytics?: StrategyRiskAnalytics;
       positionSizing?: PositionSizing;
       rankingBreakdown?: RankingBreakdown;
       whyItRanked?: string[];
@@ -449,19 +460,26 @@ export async function screenOptionStrategies(
         symbolsPlanned += 1;
       }
       warnings.push(...plan.warnings.map(warning => `${underlying.symbol}: ${warning}`));
-      allPlans.push(...plan.Data.map(item => ({
-        ...item,
-        symbol: underlying.symbol,
-        keyword: underlying.keyword,
-        optionRootId: plan.optionRoot.optionRootId,
-        underlyingPrice: plan.optionRoot.underlyingPrice,
-        underlyingPercentChange: underlying.percentChange,
-        underlyingExchangeId: underlying.exchangeId,
-        rootDescription: plan.optionRoot.description,
-        screeningContext: underlying.screeningContext,
-        newsContext: underlying.newsContext,
-        effectiveContext: underlying.effectiveContext,
-      })));
+      allPlans.push(...plan.Data.map(item => {
+        const riskAnalytics = buildPlanRiskAnalytics(item, {
+          playbook,
+          screeningContext: underlying.screeningContext,
+        });
+        return {
+          ...item,
+          symbol: underlying.symbol,
+          keyword: underlying.keyword,
+          optionRootId: plan.optionRoot.optionRootId,
+          underlyingPrice: plan.optionRoot.underlyingPrice,
+          underlyingPercentChange: underlying.percentChange,
+          underlyingExchangeId: underlying.exchangeId,
+          rootDescription: plan.optionRoot.description,
+          screeningContext: enrichTechnicalContextWithRisk(underlying.screeningContext, riskAnalytics),
+          newsContext: underlying.newsContext,
+          effectiveContext: underlying.effectiveContext,
+          riskAnalytics,
+        };
+      }));
     } catch (error) {
       const message = formatScreenError(error);
       underlying.planned = false;
@@ -1186,6 +1204,61 @@ function playbookFitScore(
   const objectiveFit = objectiveScore(plan, ranking.objective);
   const riskFit = riskProfileScore(plan, ranking.riskProfile);
   return clampScore(strategyFit * 0.25 + dteFit * 0.25 + objectiveFit * 0.3 + riskFit * 0.2);
+}
+
+function buildPlanRiskAnalytics(
+  plan: OptionStrategyPlan,
+  options: {
+    playbook: StrategyPlaybook;
+    screeningContext?: TechnicalScreeningContext;
+  },
+): StrategyRiskAnalytics {
+  const metrics = options.screeningContext?.metrics;
+  return buildStrategyRiskAnalytics({
+    annualizedVolatilityPercent: metrics?.annualizedVolatilityPercent,
+    averageRange14dPercent: metrics?.averageRange14dPercent,
+    direction: inferPlanDirection(plan),
+    dte: plan.daysToExpiry,
+    longStrike: debitSpreadLongStrike(plan),
+    maxLoss: plan.maxLoss,
+    maxProfit: plan.maxProfit,
+    playbook: options.playbook,
+    spot: plan.underlyingPrice,
+  });
+}
+
+function enrichTechnicalContextWithRisk(
+  context: TechnicalScreeningContext | undefined,
+  analytics: StrategyRiskAnalytics,
+): TechnicalScreeningContext | undefined {
+  if (!context) {
+    return undefined;
+  }
+  return {
+    ...context,
+    metrics: {
+      ...context.metrics,
+      expectedMove1Sigma: analytics.expectedMove1Sigma,
+      expectedMove1SigmaPercent: analytics.expectedMove1SigmaPercent,
+      expectedMove2Sigma: analytics.expectedMove2Sigma,
+      expectedMove2SigmaPercent: analytics.expectedMove2SigmaPercent,
+      atr14Estimate: analytics.atr14Estimate,
+    },
+  };
+}
+
+function inferPlanDirection(plan: OptionStrategyPlan): StrategyDirection {
+  if (plan.strategy === 'call_credit_spread') return 'bearish';
+  if (plan.strategy === 'iron_condor') return 'neutral';
+  if (plan.strategy === 'debit_spread' && plan.legs.every(leg => leg.putCall === 'Put')) return 'bearish';
+  return 'bullish';
+}
+
+function debitSpreadLongStrike(plan: OptionStrategyPlan): number | undefined {
+  if (plan.strategy !== 'debit_spread') {
+    return undefined;
+  }
+  return plan.legs.find(leg => leg.buySell === 'Buy')?.strikePrice;
 }
 
 function objectiveScore(plan: ScreenOptionStrategiesResult['Data'][number], objective: TradeObjective): number {

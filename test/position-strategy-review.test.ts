@@ -132,7 +132,7 @@ describe('reviewStrategyPositions', () => {
         thetaDailyPercentOfRisk: expect.any(Number),
       }),
     });
-    expect(result.reviews[0]?.triggeredRules.join(' ')).toContain('Profit target reached');
+    expect(result.reviews[0]?.triggeredRules.join(' ')).toContain('Profit target trim');
   });
 
   it('uses underlying prices for option thesis invalidation and reports EV when supplied', async () => {
@@ -177,6 +177,167 @@ describe('reviewStrategyPositions', () => {
       }),
     });
     expect(result.reviews[0]?.triggeredRules.join(' ')).toContain('Thesis invalidation');
+  });
+
+  it('applies playbook-aware soft stops and time stops for option follow-up', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(
+      client,
+      {
+        accountKey: 'account-1',
+        strategyPositions: [
+          {
+            name: 'AAA soft stop spread',
+            symbol: 'AAA',
+            strategy: 'debit_spread',
+            entryNetDebit: 2,
+            entryMaxRisk: 200,
+            entryMaxProfit: 300,
+            playbook: 'aggressive_short_term',
+            openedDte: 30,
+            rules: {
+              softStopSpot: 103,
+            },
+            legs: [
+              { uic: 101, buySell: 'Buy', amount: 1, expiry: '2026-01-17', putCall: 'Call', strike: 100 },
+              { uic: 102, buySell: 'Sell', amount: 1, expiry: '2026-01-17', putCall: 'Call', strike: 105 },
+            ],
+          },
+          {
+            name: 'AAA time stop spread',
+            symbol: 'AAA',
+            strategy: 'debit_spread',
+            entryNetDebit: 5,
+            entryMaxRisk: 500,
+            entryMaxProfit: 500,
+            rules: {
+              timeStopDte: 20,
+            },
+            legs: [
+              { uic: 101, buySell: 'Buy', amount: 1, expiry: '2026-01-17', putCall: 'Call', strike: 100 },
+              { uic: 102, buySell: 'Sell', amount: 1, expiry: '2026-01-17', putCall: 'Call', strike: 105 },
+            ],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.reviews[0]).toMatchObject({
+      verdict: 'consider_close',
+      riskAnalytics: expect.objectContaining({
+        playbook: 'aggressive_short_term',
+      }),
+    });
+    expect(result.reviews[0]?.triggeredRules.join(' ')).toContain('Soft stop reached');
+    expect(result.reviews[1]).toMatchObject({
+      verdict: 'consider_close',
+    });
+    expect(result.reviews[1]?.triggeredRules.join(' ')).toContain('Time stop reached');
+  });
+
+  it('uses adjusted long-dated profit targets before trimming winners', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(
+      client,
+      {
+        accountKey: 'account-1',
+        strategyPositions: [
+          {
+            name: 'AAA LEAPS-style spread',
+            symbol: 'AAA',
+            strategy: 'debit_spread',
+            entryNetDebit: 2,
+            entryMaxRisk: 200,
+            entryMaxProfit: 300,
+            playbook: 'leaps_replacement',
+            openedDte: 239,
+            legs: [
+              { uic: 101, buySell: 'Buy', amount: 1, expiry: '2026-01-17', putCall: 'Call', strike: 100 },
+              { uic: 102, buySell: 'Sell', amount: 1, expiry: '2026-01-17', putCall: 'Call', strike: 105 },
+            ],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.reviews[0]?.verdict).not.toBe('consider_trim');
+    expect(result.reviews[0]?.triggeredRules.join(' ')).not.toContain('Profit target reached');
+  });
+
+  it('returns DTE-aware trim sizing, stop raise, and a close order draft', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(
+      client,
+      {
+        accountKey: 'account-1',
+        reviewDepth: 'standard',
+        strategyPositions: [
+          {
+            name: 'AAA scaled winner',
+            symbol: 'AAA',
+            strategy: 'debit_spread',
+            entryCost: 600,
+            entryMaxRisk: 600,
+            entryMaxProfit: 900,
+            openedDte: 30,
+            playbook: 'aggressive_short_term',
+            rules: {
+              profitTakePercentOfMaxProfit: 50,
+            },
+            legs: [
+              { uic: 101, buySell: 'Buy', amount: 3, expiry: '2026-01-17', putCall: 'Call', strike: 100 },
+              { uic: 102, buySell: 'Sell', amount: 3, expiry: '2026-01-17', putCall: 'Call', strike: 105 },
+            ],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.reviews[0]).toMatchObject({
+      verdict: 'consider_trim',
+      dteFractionElapsed: 0.4667,
+      dteFractionElapsedPercent: 46.67,
+      profitVelocity: expect.any(Number),
+      suggestedTrim: {
+        fractionToClose: 0.5,
+        percentToClose: 50,
+        label: 'close_half',
+      },
+      suggestedStopRaiseLevel: 900,
+      suggestedTrimOrderDraft: {
+        AccountKey: 'account-1',
+        OrderPrice: 4,
+        OrderType: 'Limit',
+        Legs: [
+          { Uic: 101, BuySell: 'Sell', Amount: 2, ToOpenClose: 'ToClose' },
+          { Uic: 102, BuySell: 'Buy', Amount: 2, ToOpenClose: 'ToClose' },
+        ],
+      },
+      expectedRemainingProfit: expect.objectContaining({
+        notes: expect.arrayContaining([expect.any(String)]),
+      }),
+      regretAsymmetry: expect.objectContaining({
+        flag: expect.any(Boolean),
+      }),
+    });
   });
 
   it('loads strategy positions from a saved snapshot path', async () => {
@@ -318,12 +479,12 @@ function followUpFetchMock(): typeof fetch {
         Data: [
           {
             DisplayAndFormat: { Symbol: 'AAA:xnas' },
-            PositionBase: { Uic: 101, AssetType: 'StockOption', Amount: 1, BuySell: 'Buy' },
+            PositionBase: { Uic: 101, AssetType: 'StockOption', Amount: 3, BuySell: 'Buy' },
             PositionView: { UnderlyingCurrentPrice: 102 },
           },
           {
             DisplayAndFormat: { Symbol: 'AAA:xnas' },
-            PositionBase: { Uic: 102, AssetType: 'StockOption', Amount: 1, BuySell: 'Sell' },
+            PositionBase: { Uic: 102, AssetType: 'StockOption', Amount: 3, BuySell: 'Sell' },
             PositionView: { UnderlyingCurrentPrice: 102 },
           },
           {
