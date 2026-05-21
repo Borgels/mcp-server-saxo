@@ -316,6 +316,8 @@ optionable underlyings first and then rank account-aware option strategy plans:
   "riskProfile": "balanced",
   "includeAccountContext": true,
   "riskBudgetPercent": 1,
+  "requireGreeks": true,
+  "maxThetaDailyPercentOfRisk": 1,
   "maxUnderlyings": 50,
   "maxUnderlyingScan": 500,
   "maxSymbolsToPlan": 5,
@@ -327,7 +329,9 @@ Option strategy planning uses Saxo option-chain quotes, Saxo Greeks, optional
 OptionsChain IV context, and account-aware sizing. Multi-leg candidates include
 aggregated net delta, gamma, theta, and vega; long-premium structures such as
 long calls and debit spreads are penalized when theta decay is large relative
-to max risk.
+to max risk. Set `requireGreeks=true` to reject candidates when Saxo does not
+return complete delta, gamma, theta, and vega, and use
+`maxThetaDailyPercentOfRisk` to cap acceptable daily decay.
 
 Use `saxo_plan_portfolio_strategy` for whole-account deployment. It reads the
 account snapshot, runs the stock and option screeners, then returns target
@@ -349,6 +353,8 @@ conviction risk:
   "maxSectorPercent": 35,
   "maxOptionsRiskPercent": 5,
   "riskBudgetPercentPerIdea": 1,
+  "requireGreeks": true,
+  "maxThetaDailyPercentOfRisk": 1,
   "optionTheses": [
     {
       "name": "Long-term stock replacement",
@@ -372,6 +378,9 @@ from fundamentals context; otherwise the response includes a warning instead
 of pretending sector caps were applied. Option thesis output includes selected
 and rejected candidates, thesis budgets, max-loss exposure, expiry buckets,
 strategy mix, deployment rules, and simple scenario notes.
+For an options-only account, set `includeStocks=false`; the planner then keeps
+stock sleeves at zero and treats the options risk budget as the deployable
+account sleeve instead of a small satellite.
 
 ## Tools
 

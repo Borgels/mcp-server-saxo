@@ -43,6 +43,8 @@ export interface PlanOptionStrategyInput extends GetOptionChainInput {
   strategies?: OptionStrategyKind[];
   maxCandidates?: number;
   riskBudget?: number;
+  requireGreeks?: boolean;
+  maxThetaDailyPercentOfRisk?: number;
   minOpenInterest?: number;
   maxSpreadPercent?: number;
   includeVolatilityContext?: boolean;
@@ -403,7 +405,10 @@ export async function planOptionStrategy(
     }
   }
 
-  const ranked = plans
+  const { plans: greekFilteredPlans, missingGreeksCount, thetaFilteredCount } = filterByGreekRequirements(plans, input);
+  warnings.push(...greekFilterWarnings({ missingGreeksCount, thetaFilteredCount }, input));
+
+  const ranked = greekFilteredPlans
     .filter(plan => input.riskBudget === undefined || plan.maxLoss === undefined || plan.maxLoss <= input.riskBudget)
     .sort((a, b) => b.score.total - a.score.total)
     .slice(0, maxCandidates)
@@ -1076,6 +1081,59 @@ function leg(contract: OptionContract, buySell: 'Buy' | 'Sell'): StrategyLeg {
     quoteSpreadPercent: contract.quoteSpreadPercent,
     toOpenClose: 'ToOpen',
   };
+}
+
+function filterByGreekRequirements(plans: OptionStrategyPlan[], input: PlanOptionStrategyInput): {
+  plans: OptionStrategyPlan[];
+  missingGreeksCount: number;
+  thetaFilteredCount: number;
+} {
+  const filtered: OptionStrategyPlan[] = [];
+  let missingGreeksCount = 0;
+  let thetaFilteredCount = 0;
+
+  for (const plan of plans) {
+    if (input.requireGreeks && !hasCompleteCoreGreeks(plan.greeks)) {
+      missingGreeksCount += 1;
+      continue;
+    }
+    if (
+      input.maxThetaDailyPercentOfRisk !== undefined &&
+      plan.greeks?.theta !== undefined &&
+      plan.greeks.theta < 0 &&
+      (plan.greeks.thetaDailyPercentOfRisk ?? Number.POSITIVE_INFINITY) > input.maxThetaDailyPercentOfRisk
+    ) {
+      thetaFilteredCount += 1;
+      continue;
+    }
+    filtered.push(plan);
+  }
+
+  return { plans: filtered, missingGreeksCount, thetaFilteredCount };
+}
+
+function hasCompleteCoreGreeks(greeks: StrategyGreeks | undefined): boolean {
+  return greeks?.delta !== undefined &&
+    greeks.gamma !== undefined &&
+    greeks.theta !== undefined &&
+    greeks.vega !== undefined;
+}
+
+function greekFilterWarnings(
+  counts: { missingGreeksCount: number; thetaFilteredCount: number },
+  input: PlanOptionStrategyInput,
+): string[] {
+  const warnings: string[] = [];
+  if (counts.missingGreeksCount > 0) {
+    warnings.push(`Filtered ${counts.missingGreeksCount} option candidate(s) because complete Saxo Greeks were unavailable.`);
+  }
+  if (counts.thetaFilteredCount > 0 && input.maxThetaDailyPercentOfRisk !== undefined) {
+    warnings.push(
+      `Filtered ${counts.thetaFilteredCount} option candidate(s) because theta drag exceeded ` +
+      `${input.maxThetaDailyPercentOfRisk}% of max risk per day.`,
+    );
+  }
+  return warnings;
 }
 
 function aggregateStrategyGreeks(

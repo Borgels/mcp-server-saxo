@@ -345,6 +345,36 @@ describe('screenOptionStrategies', () => {
     });
   });
 
+  it('can hard-reject options portfolio candidates when Saxo Greeks are missing', async () => {
+    const client = testClient(strategyScreenerFetchMock({ omitGreeks: true }));
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        requireGreeks: true,
+        maxOptionsRiskPercent: 50,
+        optionTheses: [
+          {
+            name: 'AAA options only',
+            symbols: ['AAA'],
+            role: 'core_conviction',
+            horizon: 'swing',
+            preferredStructures: ['debit_spread'],
+          },
+        ],
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.targetAllocation.find(item => item.sleeve === 'stock_core')?.targetPercent).toBe(0);
+    expect(result.targetAllocation.find(item => item.sleeve === 'stock_tactical')?.targetPercent).toBe(0);
+    expect(result.optionsPortfolioPlan?.selectedCandidates).toHaveLength(0);
+    expect(result.optionsPortfolioPlan?.rejectedCandidates[0]?.reason).toContain('complete Saxo Greeks were unavailable');
+  });
+
   it('keeps option-root failures visible as rejected portfolio candidates', async () => {
     const client = testClient(strategyScreenerFetchMock());
 
@@ -383,7 +413,7 @@ function testClient(fetchMock: typeof fetch): SaxoClient {
   });
 }
 
-function strategyScreenerFetchMock() {
+function strategyScreenerFetchMock(options: { omitGreeks?: boolean } = {}) {
   return vi.fn<typeof fetch>(async (url, init) => {
     const parsed = new URL(String(url));
     if (String(url).includes('alphavantage.co')) {
@@ -472,7 +502,7 @@ function strategyScreenerFetchMock() {
       if (assetType === 'Stock') {
         return jsonResponse({ Data: uics.map((uic, index) => stockPrice(uic, index === 0 ? 'AAA:xnas' : 'BBB:xnas')) });
       }
-      return jsonResponse({ Data: uics.map(optionPrice) });
+      return jsonResponse({ Data: uics.map(uic => optionPrice(uic, options)) });
     }
     if (parsed.pathname.endsWith('/chart/v3/charts')) {
       return jsonResponse(chart(Number(parsed.searchParams.get('Uic'))));
@@ -609,7 +639,7 @@ function option(Uic: number, PutCall: 'Put' | 'Call', StrikePrice: number) {
   return { PutCall, StrikePrice, TradingStatus: 'Tradable', Uic, UnderlyingUic: 11 };
 }
 
-function optionPrice(Uic: number) {
+function optionPrice(Uic: number, options: { omitGreeks?: boolean } = {}) {
   const lastTwo = Uic % 100;
   const table: Record<number, { bid: number; ask: number; oi: number }> = {
     1: { bid: 1.1, ask: 1.2, oi: 700 },
@@ -622,7 +652,7 @@ function optionPrice(Uic: number) {
   const quote = table[lastTwo] ?? { bid: 1, ask: 1.2, oi: 500 };
   return {
     DisplayAndFormat: { Description: `OPT${Uic}`, Symbol: `OPT${Uic}` },
-    Greeks: {
+    Greeks: options.omitGreeks ? undefined : {
       Delta: lastTwo <= 3 ? -0.35 : 0.45,
       Gamma: 0.03,
       Theta: -0.04,

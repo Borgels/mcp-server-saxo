@@ -32,6 +32,8 @@ export interface ScreenOptionStrategiesInput {
   maxSymbolsToPlan?: number;
   maxPlans?: number;
   riskBudget?: number;
+  requireGreeks?: boolean;
+  maxThetaDailyPercentOfRisk?: number;
   includeAccountContext?: boolean;
   riskBudgetPercent?: number;
   maxPortfolioRiskPercent?: number;
@@ -181,6 +183,8 @@ export interface ScreenOptionStrategiesResult {
     technicalHorizon: number;
     technicalBars: number;
     riskBudget?: number;
+    requireGreeks: boolean;
+    maxThetaDailyPercentOfRisk?: number;
     includeAccountContext: boolean;
     riskBudgetPercent: number;
     maxPortfolioRiskPercent: number;
@@ -336,6 +340,8 @@ export async function screenOptionStrategies(
   const maxUnderlyingScan = clampInt(input.maxUnderlyingScan ?? 500, maxUnderlyings, 500);
   const maxSymbolsToPlan = clampInt(input.maxSymbolsToPlan ?? 5, 1, 10);
   const maxPlans = clampInt(input.maxPlans ?? 10, 1, 25);
+  const requireGreeks = input.requireGreeks ?? false;
+  const maxThetaDailyPercentOfRisk = input.maxThetaDailyPercentOfRisk;
   const includeAccountContext = input.includeAccountContext ?? true;
   const riskBudgetPercent = clampNumber(input.riskBudgetPercent ?? 1, 0.01, 100);
   const maxPortfolioRiskPercent = clampNumber(input.maxPortfolioRiskPercent ?? 5, 0.01, 100);
@@ -418,6 +424,8 @@ export async function screenOptionStrategies(
         maxDte,
         maxCandidates: Math.min(8, maxPlans),
         riskBudget: input.riskBudget,
+        requireGreeks,
+        maxThetaDailyPercentOfRisk,
         minOpenInterest,
         maxSpreadPercent,
         includeVolatilityContext,
@@ -514,6 +522,8 @@ export async function screenOptionStrategies(
       technicalHorizon,
       technicalBars,
       riskBudget: input.riskBudget,
+      requireGreeks,
+      maxThetaDailyPercentOfRisk,
       includeAccountContext,
       riskBudgetPercent,
       maxPortfolioRiskPercent,

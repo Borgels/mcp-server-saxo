@@ -35,6 +35,8 @@ export interface PlanPortfolioStrategyInput {
   maxThesisRiskPercent?: number;
   maxSingleTradeRiskPercent?: number;
   riskBudgetPercentPerIdea?: number;
+  requireGreeks?: boolean;
+  maxThetaDailyPercentOfRisk?: number;
   optionsMode?: OptionsMode;
   includeStocks?: boolean;
   includeOptions?: boolean;
@@ -61,6 +63,8 @@ export interface PortfolioStrategyResult {
     maxThesisRiskPercent?: number;
     maxSingleTradeRiskPercent?: number;
     riskBudgetPercentPerIdea: number;
+    requireGreeks: boolean;
+    maxThetaDailyPercentOfRisk?: number;
     optionsMode: OptionsMode;
     includeStocks: boolean;
     includeOptions: boolean;
@@ -163,6 +167,10 @@ export async function planPortfolioStrategy(
     ? undefined
     : clampNumber(input.maxSingleTradeRiskPercent, 0.01, 100);
   const riskBudgetPercentPerIdea = clampNumber(input.riskBudgetPercentPerIdea ?? 1, 0.01, 100);
+  const requireGreeks = input.requireGreeks ?? false;
+  const maxThetaDailyPercentOfRisk = input.maxThetaDailyPercentOfRisk === undefined
+    ? undefined
+    : clampNumber(input.maxThetaDailyPercentOfRisk, 0, 100);
   const includeStocks = input.includeStocks ?? true;
   const includeOptions = input.includeOptions ?? true;
   const maxStockIdeas = clampInt(input.maxStockIdeas ?? 8, 1, 25);
@@ -207,6 +215,8 @@ export async function planPortfolioStrategy(
       riskBudgetPercent: riskBudgetPercentPerIdea,
       maxPortfolioRiskPercent: maxOptionsRiskPercent,
       maxSymbolExposurePercent: maxSingleNamePercent,
+      requireGreeks,
+      maxThetaDailyPercentOfRisk,
       includeNewsContext: input.includeNewsContext ?? false,
     }, now)
     : undefined;
@@ -285,6 +295,8 @@ export async function planPortfolioStrategy(
       maxThesisRiskPercent,
       maxSingleTradeRiskPercent,
       riskBudgetPercentPerIdea,
+      requireGreeks,
+      maxThetaDailyPercentOfRisk,
       optionsMode,
       includeStocks,
       includeOptions,
@@ -339,7 +351,11 @@ function buildTargetAllocation(input: {
   objective: PortfolioObjective;
   targetInvestedPercent: number;
 }): PortfolioStrategyResult['targetAllocation'] {
-  const optionsPercent = input.includeOptions ? Math.min(input.maxOptionsRiskPercent, input.objective === 'income_options' ? 8 : 5) : 0;
+  const optionsPercent = input.includeOptions
+    ? input.includeStocks
+      ? Math.min(input.maxOptionsRiskPercent, input.objective === 'income_options' ? 8 : 5)
+      : Math.min(input.maxOptionsRiskPercent, Math.max(0, input.targetInvestedPercent - input.cashReservePercent))
+    : 0;
   const tacticalPercent = input.includeStocks ? (input.objective === 'growth' ? 20 : 10) : 0;
   const stockCorePercent = input.includeStocks
     ? Math.max(0, input.targetInvestedPercent - optionsPercent - tacticalPercent)
