@@ -4,6 +4,13 @@
   "description": "MCP server for the Saxo Bank OpenAPI (SIM and LIVE trading).",
   "type": "module",
   "main": "./dist/transports/stdio.js",
+  "exports": {
+    ".": "./dist/transports/stdio.js",
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "default": "./dist/gateway.js"
+    }
+  },
   "files": [
     "dist",
     "manifest.json",
@@ -17,12 +24,13 @@
     "mcp-server-saxo": "./dist/transports/stdio.js"
   },
   "scripts": {
-    "build": "tsup src/transports/stdio.ts src/transports/http.ts src/bin/auth.ts --format esm --dts --clean --sourcemap",
+    "build": "tsup src/transports/stdio.ts src/transports/http.ts src/bin/auth.ts src/gateway.ts --format esm --dts --clean --sourcemap",
     "dev": "tsx src/transports/stdio.ts",
     "dev:http": "tsx src/transports/http.ts",
     "auth": "tsx src/bin/auth.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "prepare": "npm run build",
     "prepack": "npm run typecheck && npm test && npm run build",
     "smoke:live": "tsx test/live-smoke.ts",
     "mcpb:validate": "npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb validate manifest.json",
