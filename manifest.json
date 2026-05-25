@@ -4,7 +4,7 @@
   "display_name": "Saxo Bank OpenAPI",
   "version": "0.2.2",
   "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
-  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, single-leg and multi-leg option orders, Saxo price alerts, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
+  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, local SQLite strategy/ledger state, single-leg and multi-leg option orders, Saxo price alerts, and OAuth login. LIVE trading is denied by default; SIM is the default environment. Saxo write tools run through a policy + audit stack with default-deny semantics on LIVE.",
   "author": {
     "name": "Borgels",
     "url": "https://github.com/Borgels"
@@ -29,7 +29,7 @@
   "compatibility": {
     "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
-      "node": ">=20.11"
+      "node": ">=24.0"
     }
   },
   "server": {
@@ -53,6 +53,8 @@
         "SAXO_TIMEOUT_MS": "${user_config.SAXO_TIMEOUT_MS}",
         "ALPHA_VANTAGE_API_KEY": "${user_config.ALPHA_VANTAGE_API_KEY}",
         "SAXO_STRATEGY_SNAPSHOT_PATH": "${user_config.SAXO_STRATEGY_SNAPSHOT_PATH}",
+        "SAXO_TRADING_DB_PATH": "${user_config.SAXO_TRADING_DB_PATH}",
+        "SAXO_ACCOUNT_STATUS_DIR": "${user_config.SAXO_ACCOUNT_STATUS_DIR}",
         "SAXO_ENABLE_LIVE_TRADING": "${user_config.SAXO_ENABLE_LIVE_TRADING}",
         "SAXO_ENABLE_LIVE_ALERT_WRITES": "${user_config.SAXO_ENABLE_LIVE_ALERT_WRITES}",
         "SAXO_POLICY_PATH": "${user_config.SAXO_POLICY_PATH}",
@@ -154,6 +156,18 @@
       "type": "file",
       "title": "Strategy snapshot path",
       "description": "Optional. JSON file used by saxo_review_strategy_positions when the tool call does not pass strategyPositions or strategySnapshotPath. Leave blank for account-status-only reviews or pass strategyPositions directly.",
+      "required": false
+    },
+    "SAXO_TRADING_DB_PATH": {
+      "type": "file",
+      "title": "Trading SQLite DB path",
+      "description": "Optional local SQLite database path for strategy registry, order ledger, imported artefacts, and account snapshots. Defaults to ./saxo-trading.sqlite.",
+      "required": false
+    },
+    "SAXO_ACCOUNT_STATUS_DIR": {
+      "type": "directory",
+      "title": "Account status snapshot directory",
+      "description": "Optional local directory where saxo_account_status_report writes dated JSON snapshots. SQLite snapshots are controlled by SAXO_TRADING_DB_PATH.",
       "required": false
     },
     "SAXO_ENABLE_LIVE_TRADING": {

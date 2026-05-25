@@ -128,6 +128,8 @@ export interface RankingBreakdown {
   contextScore: number;
   playbookFitScore: number;
   accountFitScore: number;
+  upsideCaptureScore?: number;
+  runnerSuitabilityScore?: number;
   finalScore: number;
 }
 
@@ -231,6 +233,7 @@ export type StrategyPlaybook =
   | 'earnings_defined_risk'
   | 'long_term_directional'
   | 'leaps_replacement'
+  | 'convex_momentum'
   | 'quality_put_write';
 
 export type RiskProfile = 'conservative' | 'balanced' | 'aggressive';
@@ -311,6 +314,15 @@ const PLAYBOOK_DEFAULTS: Record<StrategyPlaybook, PlaybookDefaults> = {
     minOpenInterest: 10,
     maxSpreadPercent: 45,
     notes: ['LEAPS replacement playbook: accepts wider spreads but treats liquidity as a major risk note.'],
+  },
+  convex_momentum: {
+    objective: 'directional',
+    strategies: ['long_call', 'debit_spread'],
+    minDte: 45,
+    maxDte: 365,
+    minOpenInterest: 25,
+    maxSpreadPercent: 55,
+    notes: ['Convex momentum playbook: favors uncapped or runner-friendly bullish structures over narrow capped spreads.'],
   },
   quality_put_write: {
     objective: 'income',
@@ -639,7 +651,7 @@ function resolveUnderlyingPresets(
 }
 
 function defaultUniverseForPlaybook(playbook: StrategyPlaybook): Exclude<UnderlyingUniverse, 'auto' | 'single_preset'> {
-  if (playbook === 'long_term_directional' || playbook === 'leaps_replacement') {
+  if (playbook === 'long_term_directional' || playbook === 'leaps_replacement' || playbook === 'convex_momentum') {
     return 'bullish_movers';
   }
   if (playbook === 'quality_put_write') {
@@ -1185,6 +1197,10 @@ function playbookFitScore(
   const dteFit = scaleDownLocal(Math.abs(plan.daysToExpiry - midpointLocal(defaults.minDte, defaults.maxDte)), 0, Math.max(7, (defaults.maxDte - defaults.minDte) / 2));
   const objectiveFit = objectiveScore(plan, ranking.objective);
   const riskFit = riskProfileScore(plan, ranking.riskProfile);
+  const momentumFit = ranking.playbook === 'convex_momentum' ? convexMomentumFitScore(plan) : undefined;
+  if (momentumFit !== undefined) {
+    return clampScore(strategyFit * 0.2 + dteFit * 0.15 + objectiveFit * 0.2 + riskFit * 0.15 + momentumFit * 0.3);
+  }
   return clampScore(strategyFit * 0.25 + dteFit * 0.25 + objectiveFit * 0.3 + riskFit * 0.2);
 }
 
@@ -1225,6 +1241,42 @@ function riskProfileScore(plan: ScreenOptionStrategiesResult['Data'][number], ri
     return clampScore(scaleUpLocal(rewardToRisk, 0.2, 2) * 0.6 + scaleUpLocal(maxLoss, 250, 3_000) * 0.4);
   }
   return clampScore(scaleUpLocal(rewardToRisk, 0.15, 0.8) * 0.5 + scaleDownLocal(maxLoss, 500, 4_000) * 0.5);
+}
+
+function convexMomentumFitScore(plan: ScreenOptionStrategiesResult['Data'][number]): number {
+  return clampScore(upsideCaptureScoreForPlan(plan) * 0.55 + runnerSuitabilityScoreForPlan(plan) * 0.45);
+}
+
+function upsideCaptureScoreForPlan(plan: ScreenOptionStrategiesResult['Data'][number]): number {
+  if (plan.strategy === 'long_call') {
+    return 100;
+  }
+  if (plan.strategy !== 'debit_spread') {
+    return 35;
+  }
+  const rewardToRisk = plan.maxProfit && plan.maxLoss && plan.maxLoss > 0 ? plan.maxProfit / plan.maxLoss : 0;
+  const width = spreadWidth(plan);
+  const widthPercent = width && plan.underlyingPrice ? width / plan.underlyingPrice * 100 : undefined;
+  return clampScore(scaleUpLocal(rewardToRisk, 0.75, 3) * 0.65 + scaleUpLocal(widthPercent ?? 0, 8, 40) * 0.35);
+}
+
+function runnerSuitabilityScoreForPlan(plan: ScreenOptionStrategiesResult['Data'][number]): number {
+  const dteScore = scaleUpLocal(plan.daysToExpiry, 45, 365);
+  const thetaScore = scaleDownLocal(plan.greeks?.thetaDailyPercentOfRisk ?? 0.5, 0.1, 2.5);
+  const liquidityScore = plan.score.liquidity;
+  const structureScore = plan.strategy === 'long_call' ? 95 : plan.strategy === 'debit_spread' ? 75 : 35;
+  return clampScore(dteScore * 0.35 + thetaScore * 0.25 + liquidityScore * 0.2 + structureScore * 0.2);
+}
+
+function spreadWidth(plan: ScreenOptionStrategiesResult['Data'][number]): number | undefined {
+  if (plan.legs.length < 2) {
+    return undefined;
+  }
+  const strikes = plan.legs.map(leg => leg.strikePrice).filter(value => Number.isFinite(value));
+  if (strikes.length < 2) {
+    return undefined;
+  }
+  return Math.max(...strikes) - Math.min(...strikes);
 }
 
 function contextForSymbol(
@@ -1300,13 +1352,15 @@ async function buildAccountContext(
   }
 
   try {
-    const balance = await getBalance(client, clientKey ? { clientKey } : { accountKey: input.accountKey });
+    const balance = await getBalance(client, { accountKey: input.accountKey, clientKey });
     context.netValue = firstNumericPath(balance, [
-      'NetEquityForMargin',
-      'NetEquity',
-      'AccountValue',
       'TotalValue',
       'TotalAccountValue',
+      'AccountValue',
+      'ExtendedTradingHoursData.TotalValue',
+      'NetEquityForMargin',
+      'InitialMargin.NetEquityForMargin',
+      'NetEquity',
       'Equity',
       'Balance',
     ]);
@@ -1373,6 +1427,8 @@ function enrichPlanDecisionSupport(
     riskProfile: options.riskProfile,
   });
   const accountFitScore = scoreAccountFit(positionSizing);
+  const upsideCaptureScore = options.playbook === 'convex_momentum' ? upsideCaptureScoreForPlan(plan) : undefined;
+  const runnerSuitabilityScore = options.playbook === 'convex_momentum' ? runnerSuitabilityScoreForPlan(plan) : undefined;
   const rankingBreakdown: RankingBreakdown = {
     baseScore: plan.score.total,
     liquidityScore: plan.score.liquidity,
@@ -1380,7 +1436,13 @@ function enrichPlanDecisionSupport(
     contextScore: plan.score.context,
     playbookFitScore,
     accountFitScore,
-    finalScore: clampScore(plan.score.total * 0.6 + playbookFitScore * 0.25 + accountFitScore * 0.15),
+    upsideCaptureScore,
+    runnerSuitabilityScore,
+    finalScore: clampScore(
+      options.playbook === 'convex_momentum'
+        ? plan.score.total * 0.45 + playbookFitScore * 0.2 + accountFitScore * 0.1 + (upsideCaptureScore ?? 0) * 0.15 + (runnerSuitabilityScore ?? 0) * 0.1
+        : plan.score.total * 0.6 + playbookFitScore * 0.25 + accountFitScore * 0.15,
+    ),
   };
   const whyItRanked = explainPlanRanking(plan, rankingBreakdown, positionSizing, options.playbook, options.objective);
   const keyRisks = collectDecisionRisks(plan, positionSizing);

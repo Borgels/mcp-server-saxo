@@ -106,7 +106,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_get_option_chain',
     title: 'Get Option Chain',
     description:
-      'Fetch the option chain (strikes + expirations) for an option root. By default returns a normalized shape with one row per strike containing callUic + putUic. Pass normalize=false for the raw Saxo OptionSpace structure.',
+      'Fetch the contract option chain (strikes + expirations) for an option root. By default returns a normalized shape with one row per strike containing callUic + putUic. Pass normalize=false for the raw Saxo OptionSpace structure.',
     risk: 'read',
     examples: [
       { optionRootId: 1467, expiryDates: ['2027-01-15'] },
@@ -114,7 +114,21 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     ],
     identifierFormats: ['optionRootId (integer)'],
     safetyNotes: ['Read-only.'],
-    keywords: ['option', 'chain', 'strikes', 'expiry', 'options'],
+    keywords: ['option', 'contract option', 'chain', 'strikes', 'expiry', 'options'],
+  },
+  {
+    id: 'saxo_get_contract_option_trading_conditions',
+    title: 'Get Contract Option Trading Conditions',
+    description:
+      'Fetch account-specific trading conditions for an exchange-traded contract option root, optionally narrowed to one option Uic. Includes tradability, margin, settlement style, fees, exposure limits, and scheduled trading conditions when requested.',
+    risk: 'read',
+    examples: [
+      { accountKey: 'AccountKey...', optionRootId: 1467 },
+      { accountKey: 'AccountKey...', optionRootId: 1467, uic: 30256728, fieldGroups: ['ScheduledTradingConditions'] },
+    ],
+    identifierFormats: ['AccountKey + optionRootId (+ optional option Uic)'],
+    safetyNotes: ['Read-only. Use before precheck/place when sizing or settlement/margin rules matter.'],
+    keywords: ['option', 'contract option', 'trading conditions', 'margin', 'settlement', 'fees', 'tradability'],
   },
   {
     id: 'saxo_list_option_expiries',
@@ -266,9 +280,9 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         accountKey: 'AccountKey...',
         market: 'us_nasdaq',
         underlyingUniverse: 'auto',
-        playbook: 'income_30_60d',
-        riskProfile: 'balanced',
-        strategies: ['put_credit_spread', 'iron_condor'],
+        playbook: 'convex_momentum',
+        riskProfile: 'aggressive',
+        strategies: ['long_call', 'debit_spread'],
         maxUnderlyings: 50,
         maxUnderlyingScan: 500,
         maxSymbolsToPlan: 5,
@@ -287,6 +301,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Read-only screening. Does not call precheck or place orders.',
       'Processes candidates conservatively to reduce Saxo rate-limit risk.',
       'Use playbook, riskProfile, and objective to make ranking explicit instead of asking for a generic best trade.',
+      'Use playbook=convex_momentum for high-conviction bullish momentum where runner exposure and upside capture matter more than narrow capped risk/reward.',
       'Use underlyingUniverse=auto to let the playbook choose bullish, bearish, or two-sided movers; set underlyingPreset only when you want a specific market-mover list.',
       'Fetches account balance and positions by default for sizing and decision-brief context; set includeAccountContext=false to opt out.',
       'Scans a larger Saxo stock universe before ranking underlyings; tune maxUnderlyingScan when you need a faster or broader pass.',
@@ -338,6 +353,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         objective: 'balanced_growth_income',
         riskProfile: 'balanced',
         portfolioProfile: 'concentrated_conviction',
+        profitOptimizationMode: 'convex_momentum',
         deploymentStyle: 'staged',
         includeStocks: true,
         includeOptions: true,
@@ -353,7 +369,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         maxThetaDailyPercentOfRisk: 1,
         discoverOptionCandidates: true,
         optionDiscoveryUniverse: 'auto',
-        optionDiscoveryPlaybook: 'long_term_directional',
+        optionDiscoveryPlaybook: 'convex_momentum',
         optionTheses: [
           {
             name: 'AI infrastructure momentum',
@@ -375,6 +391,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Set discoverOptionCandidates=true to blend explicit option theses with a deterministic Saxo market/option screener discovery sleeve.',
       'Set requireGreeks=true for options-only or aggressive accounts so candidates without complete Saxo Greeks are rejected instead of merely warned.',
       'Selected option candidates include entryTiming so pullbacks can be staged separately from technical breakdowns.',
+      'Set profitOptimizationMode=convex_momentum to prefer runner-friendly long calls / wider debit spreads and report capped vs uncapped option risk.',
       'For options-only immediate plans, contract counts scale up to configured thesis, trade, and cash-reserve budgets; staged plans remain starter-sized.',
       'Risk dashboard reports cash reserve, deployable cash, unallocated option budget, and warnings when strict filters leave material cash undeployed.',
       'Use portfolioProfile=concentrated_conviction, maxSelectedUnderlyings, minPositionRiskDollars, and maxContractsPerPosition to avoid many tiny hard-to-monitor option positions.',
@@ -393,6 +410,11 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         accountKey: 'AccountKey...',
         strategySnapshotPath: './live-options-actual-strategy.json',
         reviewDepth: 'deep',
+        profitOptimizationMode: 'convex_momentum',
+        currentUnderlyingOverrides: {
+          QBTS: 27,
+          RGTI: 23,
+        },
         defaultRules: {
           profitTakePercentOfCost: 25,
           lossExitPercentOfCost: 10,
@@ -443,10 +465,95 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Stock reviews use entry cost/price rules; option reviews additionally use Greeks, theta, expiry, roll, underlying-price thesis invalidation, and max-profit/max-risk rules when supplied.',
       'Use reviewDepth=status for fast P/L and risk, standard for Saxo technical/liquidity context, and deep for technical, liquidity, news, earnings, and fundamentals when providers are configured.',
       'Option strategies can include probabilityOfProfit plus expectedProfit/expectedLoss for a simple deterministic expected-value estimate.',
+      'Use profitOptimizationMode=convex_momentum plus currentUnderlyingOverrides for postmarket fast-winner reviews when Saxo quotes are delayed or stale.',
+      'Profit optimization output can include DTE-fraction, profit velocity, remaining optionality, suggested trim/runner fractions, stop raises, and draft-only close/trim orders.',
       'portfolioStatus summarizes cash, working orders, total current strategy value, total P/L, aggregate Greeks, and verdict counts.',
       'Returns decision support verdicts such as hold, review, consider_trim, consider_close, and roll_watch.',
     ],
     keywords: ['position follow-up', 'strategy monitor', 'stocks', 'options', 'roll', 'trim', 'close', 'theta', 'greeks'],
+  },
+  {
+    id: 'saxo_account_status_report',
+    title: 'Account Status Report',
+    description:
+      'Snapshot account balance, open positions, and orders into a dated local JSON report, aggregate exposure/P&L, and compare against the previous snapshot for daily and total account status.',
+    risk: 'read',
+    examples: [
+      {
+        accountKey: 'AccountKey...',
+        outputDir: './account-status',
+        writeSnapshot: true,
+        probeHistoricalEndpoints: true,
+      },
+    ],
+    identifierFormats: ['Optional AccountKey, outputDir, compareWith snapshot path'],
+    safetyNotes: [
+      'Read-only against Saxo; it does not precheck, place, modify, or cancel orders.',
+      'It writes an optional local JSON snapshot so day-by-day deltas are reliable from the first run onward.',
+      'Saxo closed-position/activity endpoints may be unavailable for EndOfDay-netting accounts; this tool treats current balance/position snapshots as the source of truth.',
+    ],
+    keywords: ['account status', 'daily status', 'snapshot', 'balance', 'positions', 'pnl', 'performance', 'history'],
+  },
+  {
+    id: 'saxo_register_strategy',
+    title: 'Register Strategy',
+    description:
+      'Create or update a local SQLite strategy registry entry with thesis, rules, and expected legs. Local state only; does not call Saxo or place orders.',
+    risk: 'write',
+    examples: [
+      {
+        name: 'RGTI Sep runner',
+        symbol: 'RGTI',
+        strategy: 'long_call',
+        conviction: 'high',
+        legs: [{ uic: 54554799, assetType: 'StockOption', buySell: 'Buy', amount: 10 }],
+      },
+    ],
+    identifierFormats: ['Optional strategyId; otherwise generated UUID'],
+    safetyNotes: ['Local SQLite write only. Does not interact with Saxo order endpoints.'],
+    keywords: ['strategy registry', 'thesis', 'register strategy', 'ledger'],
+  },
+  {
+    id: 'saxo_list_strategies',
+    title: 'List Strategies',
+    description: 'List local SQLite strategy registry entries, optionally filtered by account, symbol, or status.',
+    risk: 'read',
+    examples: [{ status: 'open' }, { symbol: 'RGTI' }],
+    identifierFormats: ['Optional AccountKey, symbol, status'],
+    safetyNotes: ['Read-only local SQLite lookup.'],
+    keywords: ['strategy registry', 'list strategies', 'thesis', 'ledger'],
+  },
+  {
+    id: 'saxo_get_strategy',
+    title: 'Get Strategy',
+    description: 'Fetch one local SQLite strategy registry entry by strategyId.',
+    risk: 'read',
+    examples: [{ strategyId: 'strategy-id' }],
+    identifierFormats: ['strategyId'],
+    safetyNotes: ['Read-only local SQLite lookup.'],
+    keywords: ['strategy registry', 'get strategy', 'thesis', 'ledger'],
+  },
+  {
+    id: 'saxo_import_trading_history',
+    title: 'Import Trading History',
+    description:
+      'Idempotently import local JSON trading artefacts into the SQLite ledger, keeping the original files in place.',
+    risk: 'write',
+    examples: [{ paths: ['live-options-actual-strategy*.json', 'account-status/account-status*.json'] }],
+    identifierFormats: ['Local file paths or simple * globs'],
+    safetyNotes: ['Local SQLite write only. Does not call Saxo or move/delete source files.'],
+    keywords: ['import', 'trading history', 'json artifacts', 'ledger', 'sqlite'],
+  },
+  {
+    id: 'saxo_trading_ledger_report',
+    title: 'Trading Ledger Report',
+    description:
+      'Read local SQLite ledger state: strategy counts, recent order events, daily account snapshots, and imported artefact counts.',
+    risk: 'read',
+    examples: [{ fromDate: '2026-05-21', toDate: '2026-05-22' }],
+    identifierFormats: ['Optional AccountKey and YYYY-MM-DD date range'],
+    safetyNotes: ['Read-only local SQLite lookup.'],
+    keywords: ['ledger report', 'trading history', 'daily pnl', 'strategy attribution'],
   },
   {
     id: 'saxo_list_accounts',
@@ -699,7 +806,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_precheck_multileg_order',
     title: 'Precheck Multi-Leg Option Order',
     description:
-      'Validate a multi-leg option strategy (spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is always positive — the absolute price you are willing to pay (debit) or receive (credit). Saxo infers direction from the legs.',
+      'Validate a multi-leg exchange-traded contract option strategy (spread, condor, straddle, etc.) without placing it. Supports StockOption, IndexOption, StockIndexOption, and FuturesOption legs. OrderType must be Limit; OrderPrice is always positive — the absolute price you are willing to pay (debit) or receive (credit). Saxo infers direction from the legs.',
     risk: 'write',
     examples: [
       {
@@ -721,7 +828,7 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_place_multileg_order',
     title: 'Place Multi-Leg Option Order',
     description:
-      'Place a multi-leg option strategy as one atomic order with a single positive limit price (debit = pay, credit = receive). All legs must share the same option root. OrderType must be Limit.',
+      'Place a multi-leg exchange-traded contract option strategy as one atomic order with a single positive limit price (debit = pay, credit = receive). Supports StockOption, IndexOption, StockIndexOption, and FuturesOption legs. All legs must share the same option root. OrderType must be Limit.',
     risk: 'write',
     examples: [
       {

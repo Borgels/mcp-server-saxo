@@ -34,6 +34,9 @@ npm run build
 cp .env.example .env
 ```
 
+Requires Node.js **24+**. The local trading ledger uses Node's built-in
+`node:sqlite` module.
+
 Then pick one of:
 
 ### Path A — 24-hour token (quickest, one-shot)
@@ -442,6 +445,11 @@ If the Saxo account is not approved for short option legs, set
 The planner then filters out spreads and short-premium structures that open a
 short option leg and only returns long-only option structures that pass the
 remaining liquidity, Greeks, and theta gates.
+For high-conviction momentum trades where upside capture matters more than
+strictly capped risk/reward, use `playbook="convex_momentum"` in the option
+screener or `profitOptimizationMode="convex_momentum"` in the portfolio
+planner. This biases planning toward runner-friendly long calls or wider debit
+spreads and reports capped versus uncapped/runner option risk.
 
 Use `saxo_review_strategy_positions` after execution to monitor open stock and
 option strategies against the plan you opened. Pass the executed stock leg or
@@ -451,6 +459,21 @@ and P/L, and evaluates deterministic profit-taking/loss rules. Option
 strategies additionally include Greeks, theta, DTE, roll, and close rules. It
 returns verdicts such as `hold`, `review`, `consider_trim`, `consider_close`,
 and `roll_watch`; execution remains a separate explicit order workflow.
+Set `profitOptimizationMode="convex_momentum"` on reviews to add DTE-aware
+profit velocity, remaining optionality, trim/runner suggestions, stop-raise
+levels, and draft-only trim orders. When Saxo does not reflect postmarket
+moves, pass `currentUnderlyingOverrides` such as `{ "QBTS": 27, "RGTI": 23 }`;
+the output labels those prices as caller overrides.
+
+### Local trading ledger
+
+The server can keep local SQLite state in `SAXO_TRADING_DB_PATH` for strategy
+registry entries, successful order events, imported JSON artefacts, and account
+snapshots. Register theses with `saxo_register_strategy`, pass `strategyId` on
+order tools to auto-journal executions, import older local JSON snapshots with
+`saxo_import_trading_history`, and query the combined state with
+`saxo_trading_ledger_report`. Ledger writes are local-only; Saxo order safety
+guards still apply unchanged before any live trading call.
 
 ## Tools
 
@@ -471,10 +494,11 @@ rules.
 | `saxo_search_instruments` | `GET /ref/v1/instruments` | Search by keyword + asset type. |
 | `saxo_get_instrument_details` | `GET /ref/v1/instruments/details` | Detailed metadata for one or many Uics. |
 | `saxo_list_exchanges` | `GET /ref/v1/exchanges` | List exchanges (or one by ExchangeId). |
-| `saxo_get_option_chain` | `GET /ref/v1/instruments/contractoptionspaces/{optionRootId}` | Strikes + expirations. `normalize=true` (default) pivots Put/Call into one row per strike. |
+| `saxo_get_option_chain` | `GET /ref/v1/instruments/contractoptionspaces/{optionRootId}` | Contract option strikes + expirations. `normalize=true` (default) pivots Put/Call into one row per strike. |
+| `saxo_get_contract_option_trading_conditions` | `GET /cs/v1/tradingconditions/ContractOptionSpaces/{AccountKey}/{OptionRootId}` | Account-specific tradability, margin, settlement, fees, exposure limits, and scheduled trading conditions for a contract option root/Uic. |
 | `saxo_list_option_expiries` | (uses option chain) | Cheap helper: just the expiries (date, days, strike count) for an option root. |
 | `saxo_list_standard_option_expiries` | `GET /ref/v1/standarddates/optionexpiry` | Standardized option-expiry calendar (3rd Friday monthlies, quarterlies, weeklies). Distinct from `list_option_expiries`. |
-| `saxo_find_option_leg` | (composes search + chain) | Convenience helper: given symbol + expiry + strike + Call/Put, returns the leg Uic in one call instead of 4. Picks multi-leg-capable root when ambiguous. |
+| `saxo_find_option_leg` | (composes search + chain) | Convenience helper: given symbol + expiry + strike + Call/Put, returns the leg Uic in one call instead of 4. Supports StockOption, IndexOption, StockIndexOption, and FuturesOption roots. |
 | `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. Adds `_warning` if `PriceType=NoAccess`. |
 | `saxo_get_infoprices_list` | `GET /trade/v1/infoprices/list` | Snapshot prices for multiple Uics. |
 | `saxo_get_chart` | `GET /chart/v3/charts` | Historical OHLC bars (horizon in minutes). |
@@ -486,6 +510,10 @@ rules.
 | `saxo_screen_stock_strategies` | Saxo instruments + prices + chart TA + optional fundamentals/news | Opinionated stock strategy screening with decision briefs. |
 | `saxo_plan_portfolio_strategy` | Account snapshot + stock/options screeners | Whole-account target allocation, staged deployment, and risk dashboard. |
 | `saxo_review_strategy_positions` | Positions + quotes (+ Greeks for options) | Post-execution strategy follow-up with hold/trim/close/roll verdicts. |
+| `saxo_account_status_report` | Portfolio snapshot endpoints | Dated local account snapshot with balance, net positions, orders, by-underlying P/L, and delta vs the previous snapshot. |
+| `saxo_list_strategies` | Local SQLite | List registered local strategy/thesis entries. |
+| `saxo_get_strategy` | Local SQLite | Fetch one registered strategy by `strategyId`. |
+| `saxo_trading_ledger_report` | Local SQLite | Summarize strategy registry, order ledger events, snapshots, and imported artefacts. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
 | `saxo_list_positions` | `GET /port/v1/positions/me` | Open positions (one row per fill). |
@@ -506,14 +534,16 @@ rules.
 | `saxo_place_order` | `POST /trade/v2/orders` | LIVE: `SAXO_ENABLE_LIVE_TRADING=true` + `policy.json` allow + optional auto-precheck. |
 | `saxo_modify_order` | `PATCH /trade/v2/orders` | Same as place_order. |
 | `saxo_cancel_order` | `DELETE /trade/v2/orders/{ids}` | Policy + audit. |
-| `saxo_precheck_multileg_order` | `POST /trade/v2/orders/multileg/precheck` | Validate a spread (no execution). |
-| `saxo_place_multileg_order` | `POST /trade/v2/orders/multileg` | Place a spread atomically with a single net debit/credit limit. |
+| `saxo_precheck_multileg_order` | `POST /trade/v2/orders/multileg/precheck` | Validate an exchange-traded contract option spread (no execution). |
+| `saxo_place_multileg_order` | `POST /trade/v2/orders/multileg` | Place a contract option spread atomically with a single net debit/credit limit. |
 | `saxo_modify_multileg_order` | `PATCH /trade/v2/orders/multileg` | Adjust spread Amount or OrderPrice. |
 | `saxo_cancel_multileg_order` | `DELETE /trade/v2/orders/multileg/{id}` | Cancel the whole strategy. |
 | `saxo_create_price_alert` | `POST /vas/v1/pricealerts/definitions` | LIVE alert writes require `SAXO_ENABLE_LIVE_ALERT_WRITES=true` + policy allow. |
 | `saxo_update_price_alert` | `PUT /vas/v1/pricealerts/definitions/{id}` | Partial tool input is merged with the current definition before PUT. |
 | `saxo_delete_price_alerts` | `DELETE /vas/v1/pricealerts/definitions/{ids}` | Delete one or more price alerts. |
 | `saxo_update_price_alert_user_settings` | `PUT /vas/v1/pricealerts/usersettings` | Update email/popup/sound settings. |
+| `saxo_register_strategy` | Local SQLite | Create/update a local strategy registry entry. No Saxo order side effect. |
+| `saxo_import_trading_history` | Local SQLite | Import local JSON trading artefacts idempotently; source files are kept. |
 | `saxo_oauth_login` | OAuth2 PKCE | One-call local login; updates in-process tokens. Optional env-file/token-store persist. |
 | `saxo_oauth_start` | OAuth2 PKCE | Loopback redirect only; reads app creds from env. |
 | `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional env-file/token-store persist. |
@@ -581,8 +611,12 @@ Saxo returns a `MultiLegOrderId` plus per-leg `Orders[].OrderId` values.
 Use `saxo_modify_multileg_order` (Amount/OrderPrice only) or
 `saxo_cancel_multileg_order` (cancels the whole strategy) afterwards. To
 find the per-leg Uics, start with `saxo_search_instruments` for the
-underlying, then `saxo_get_option_chain` to read off strikes and
-expirations.
+underlying or option root using `assetTypes` such as `StockOption`,
+`IndexOption`, `StockIndexOption`, or `FuturesOption`, then
+`saxo_get_option_chain` to read off strikes and expirations. Use
+`saxo_get_contract_option_trading_conditions` before sizing unfamiliar
+contract option roots so margin, tradability, settlement style, and fees are
+visible before precheck/place.
 
 ## LIVE Trading Safety
 

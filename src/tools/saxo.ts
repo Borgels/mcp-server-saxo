@@ -20,6 +20,7 @@ import { planOptionStrategy } from '../saxo/options.js';
 import { screenOptionStrategies } from '../saxo/option-strategy-screener.js';
 import { planPortfolioStrategy } from '../saxo/portfolio-strategy.js';
 import { reviewStrategyPositions } from '../saxo/position-strategy-review.js';
+import { accountStatusReport } from '../saxo/account-status-report.js';
 import {
   getBalance,
   getOrder,
@@ -77,6 +78,10 @@ import {
 } from '../saxo/trading.js';
 import { readEnv } from '../saxo/env.js';
 import {
+  CONTRACT_OPTION_ASSET_TYPES,
+  getContractOptionTradingConditions,
+} from '../saxo/contract-options.js';
+import {
   cancelOauthFlow,
   completeOauthFlow,
   loadOauthConfigFromEnv,
@@ -84,6 +89,14 @@ import {
   startOauthFlow,
 } from '../saxo/oauth.js';
 import { persistOauthTokens } from '../saxo/token-persistence.js';
+import {
+  getStrategy,
+  importTradingHistory,
+  listStrategies,
+  recordOrderEvent,
+  registerStrategy,
+  tradingLedgerReport,
+} from '../saxo/trading-ledger.js';
 
 const orderDurationSchema = z.object({
   DurationType: z.enum([
@@ -111,6 +124,14 @@ const relatedOrderSchema = z.object({
   OrderDuration: orderDurationSchema,
 });
 
+const contractOptionAssetTypeSchema = z.enum(CONTRACT_OPTION_ASSET_TYPES);
+
+const ledgerFieldsSchema = {
+  strategyId: z.string().trim().min(1).optional(),
+  ledgerNote: z.string().trim().max(1000).optional(),
+  dbPath: z.string().trim().min(1).optional(),
+};
+
 const placeOrderSchema = z.object({
   AccountKey: z.string().trim().min(1),
   Uic: z.number().int().nonnegative(),
@@ -125,6 +146,7 @@ const placeOrderSchema = z.object({
   ManualOrder: z.boolean().optional(),
   ExternalReference: z.string().trim().optional(),
   Orders: z.array(relatedOrderSchema).max(10).optional(),
+  ...ledgerFieldsSchema,
 });
 
 const modifyOrderSchema = z.object({
@@ -137,11 +159,12 @@ const modifyOrderSchema = z.object({
   OrderPrice: z.number().optional(),
   StopPrice: z.number().optional(),
   OrderDuration: orderDurationSchema.optional(),
+  ...ledgerFieldsSchema,
 });
 
 const multiLegLegSchema = z.object({
   Uic: z.number().int().nonnegative(),
-  AssetType: z.enum(['StockOption', 'IndexOption']),
+  AssetType: contractOptionAssetTypeSchema,
   BuySell: z.enum(['Buy', 'Sell']),
   Amount: z.number().int().positive(),
   ToOpenClose: z.enum(['ToOpen', 'ToClose']),
@@ -155,6 +178,7 @@ const multiLegOrderSchema = z.object({
   Legs: z.array(multiLegLegSchema).min(2).max(20),
   ManualOrder: z.boolean().optional(),
   ExternalReference: z.string().trim().optional(),
+  ...ledgerFieldsSchema,
 });
 
 const modifyMultiLegOrderSchema = z.object({
@@ -162,6 +186,7 @@ const modifyMultiLegOrderSchema = z.object({
   MultiLegOrderId: z.string().trim().min(1),
   Amount: z.number().int().positive().optional(),
   OrderPrice: z.number().optional(),
+  ...ledgerFieldsSchema,
 });
 
 const priceAlertOperatorSchema = z.enum(['GreaterOrEqual', 'LessOrEqual']);
@@ -230,9 +255,11 @@ const strategyPlaybookSchema = z.enum([
   'earnings_defined_risk',
   'long_term_directional',
   'leaps_replacement',
+  'convex_momentum',
   'quality_put_write',
 ]);
 const riskProfileSchema = z.enum(['conservative', 'balanced', 'aggressive']);
+const profitOptimizationModeSchema = z.enum(['standard', 'convex_momentum']);
 const tradeObjectiveSchema = z.enum([
   'income',
   'directional',
@@ -320,7 +347,10 @@ const marketNewsContextSchema = z.object({
 const optionStrategyPlanSchema = z.object({
   keywords: z.string().trim().min(1).optional(),
   optionRootId: z.number().int().positive().optional(),
+  assetType: contractOptionAssetTypeSchema.optional(),
+  assetTypes: z.array(contractOptionAssetTypeSchema).min(1).max(CONTRACT_OPTION_ASSET_TYPES.length).optional(),
   accountKey: z.string().trim().min(1),
+  underlyingAssetType: z.string().trim().min(1).optional(),
   minDte: z.number().int().min(0).max(3650).optional(),
   maxDte: z.number().int().min(0).max(3650).optional(),
   strikeWindowPercent: z.number().positive().max(1000).optional(),
@@ -435,6 +465,7 @@ const portfolioStrategySchema = z.object({
   objective: portfolioObjectiveSchema.default('balanced_growth_income'),
   riskProfile: riskProfileSchema.default('balanced'),
   portfolioProfile: portfolioProfileSchema.default('balanced'),
+  profitOptimizationMode: profitOptimizationModeSchema.default('standard'),
   deploymentStyle: deploymentStyleSchema.default('staged'),
   targetInvestedPercent: z.number().positive().max(100).optional(),
   cashReservePercent: z.number().min(0).max(95).optional(),
@@ -505,6 +536,8 @@ const strategyPositionReviewSchema = z.object({
   clientKey: z.string().trim().min(1).optional(),
   strategySnapshotPath: z.string().trim().min(1).optional(),
   reviewDepth: z.enum(['status', 'standard', 'deep']).default('status'),
+  profitOptimizationMode: profitOptimizationModeSchema.default('standard'),
+  currentUnderlyingOverrides: z.record(z.string(), z.number().positive()).optional(),
   includeTechnicalContext: z.boolean().optional(),
   includeNewsContext: z.boolean().optional(),
   includeFundamentalsContext: z.boolean().optional(),
@@ -547,6 +580,87 @@ const strategyPositionReviewSchema = z.object({
     })).min(1).max(8),
     rules: strategyFollowUpRulesSchema.optional(),
   })).min(0).max(50).default([]),
+});
+
+const accountStatusReportSchema = z.object({
+  accountKey: z.string().trim().min(1).optional(),
+  clientKey: z.string().trim().min(1).optional(),
+  outputDir: z.string().trim().min(1).optional(),
+  dbPath: z.string().trim().min(1).optional(),
+  writeSnapshot: z.boolean().default(true),
+  compareWith: z.string().trim().min(1).optional(),
+  historyLimit: z.number().int().min(1).max(100).default(10),
+  timezone: z.string().trim().min(1).optional(),
+  includeRaw: z.boolean().default(false),
+  probeHistoricalEndpoints: z.boolean().default(false),
+});
+
+const registryLegSchema = z.object({
+  uic: z.number().int().positive(),
+  assetType: z.string().trim().min(1).optional(),
+  buySell: z.enum(['Buy', 'Sell']),
+  amount: z.number().positive(),
+  expiry: z.string().trim().optional(),
+  putCall: z.enum(['Put', 'Call']).optional(),
+  strike: z.number().optional(),
+  contractSize: z.number().positive().optional(),
+  settlementStyle: z.string().trim().min(1).optional(),
+  exerciseStyle: z.string().trim().min(1).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const registerStrategySchema = z.object({
+  dbPath: z.string().trim().min(1).optional(),
+  strategyId: z.string().trim().min(1).optional(),
+  accountKey: z.string().trim().min(1).optional(),
+  name: z.string().trim().min(1).max(200),
+  thesisName: z.string().trim().min(1).max(200).optional(),
+  symbol: z.string().trim().min(1).max(40).optional(),
+  strategy: z.string().trim().min(1).max(80).optional(),
+  status: z.enum(['planned', 'open', 'trimmed', 'closed', 'watchlist']).default('open'),
+  horizon: z.string().trim().min(1).max(80).optional(),
+  conviction: z.enum(['low', 'medium', 'high']).optional(),
+  openedAt: z.string().trim().min(1).optional(),
+  closedAt: z.string().trim().min(1).optional(),
+  rules: z.record(z.string(), z.unknown()).optional(),
+  notes: z.string().trim().max(2000).optional(),
+  legs: z.array(registryLegSchema).max(20).default([]),
+});
+
+const listStrategiesSchema = z.object({
+  dbPath: z.string().trim().min(1).optional(),
+  accountKey: z.string().trim().min(1).optional(),
+  symbol: z.string().trim().min(1).optional(),
+  status: z.string().trim().min(1).optional(),
+  limit: z.number().int().min(1).max(500).default(100),
+});
+
+const getStrategySchema = z.object({
+  dbPath: z.string().trim().min(1).optional(),
+  strategyId: z.string().trim().min(1),
+});
+
+const importTradingHistorySchema = z.object({
+  dbPath: z.string().trim().min(1).optional(),
+  paths: z.array(z.string().trim().min(1)).max(200).optional(),
+  cwd: z.string().trim().min(1).optional(),
+  limit: z.number().int().min(1).max(5000).default(1000),
+});
+
+const tradingLedgerReportSchema = z.object({
+  dbPath: z.string().trim().min(1).optional(),
+  accountKey: z.string().trim().min(1).optional(),
+  fromDate: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO 8601 date YYYY-MM-DD.')
+    .optional(),
+  toDate: z
+    .string()
+    .trim()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use ISO 8601 date YYYY-MM-DD.')
+    .optional(),
+  limit: z.number().int().min(1).max(200).default(25),
 });
 
 export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
@@ -677,7 +791,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Get Option Chain',
       description:
-        'Fetch the option chain (strikes + expirations) for an option root. Use this after saxo_search_instruments with assetTypes=[StockOption] to find the Uic of each option leg before placing a multi-leg spread. Set normalize=true (default) to return one row per strike with callUic+putUic; normalize=false returns the raw Saxo OptionSpace shape.',
+        'Fetch the contract option chain (strikes + expirations) for an option root. Use this after saxo_search_instruments with assetTypes=[StockOption,IndexOption,StockIndexOption,FuturesOption] to find the Uic of each option leg before placing a multi-leg spread. Set normalize=true (default) to return one row per strike with callUic+putUic; normalize=false returns the raw Saxo OptionSpace shape.',
       inputSchema: {
         optionRootId: z.number().int().nonnegative(),
         expiryDates: z
@@ -702,6 +816,26 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
         const raw = await getOptionChain(client, query);
         return jsonToolResult(normalize ? normalizeOptionChain(raw) : raw);
       }),
+  );
+
+  server.registerTool(
+    'saxo_get_contract_option_trading_conditions',
+    {
+      title: 'Get Contract Option Trading Conditions',
+      description:
+        'Fetch account-specific trading conditions for an exchange-traded contract option root, optionally narrowed to one option Uic. Returns tradability, margin, settlement, fees, exposure limits, and scheduled trading conditions when requested.',
+      inputSchema: {
+        accountKey: z.string().trim().min(1),
+        optionRootId: z.number().int().nonnegative(),
+        uic: z.number().int().nonnegative().optional(),
+        fieldGroups: z.array(z.string().trim().min(1)).max(20).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_contract_option_trading_conditions', input, async () =>
+        jsonToolResult(await getContractOptionTradingConditions(client, input)),
+      ),
   );
 
   server.registerTool(
@@ -750,7 +884,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Find Option Leg by Symbol/Expiry/Strike',
       description:
-        'Convenience helper that resolves an option leg Uic from human-readable parameters (symbol + expiry + strike + Call/Put). Compresses the 4-step option-discovery workflow (search instrument → search option root → fetch chain → locate strike) into one call. Useful before saxo_place_order / saxo_place_multileg_order. When multiple option roots match (e.g. ADR vs. local listing), prefers the multi-leg-capable root and surfaces alternatives in warnings[]; pass exchangeId to disambiguate.',
+        'Convenience helper that resolves a contract option leg Uic from human-readable parameters (symbol + expiry + strike + Call/Put). Compresses the 4-step option-discovery workflow (search instrument -> search option root -> fetch chain -> locate strike) into one call. Useful before saxo_place_order / saxo_place_multileg_order. When multiple option roots match (e.g. ADR vs. local listing), prefers the multi-leg-capable root and surfaces alternatives in warnings[]; pass exchangeId or assetTypes to disambiguate.',
       inputSchema: {
         symbol: z.string().trim().min(1),
         expiry: z
@@ -760,6 +894,8 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
         strike: z.number().positive(),
         putCall: z.enum(['Call', 'Put']),
         exchangeId: z.string().trim().min(1).optional(),
+        assetType: contractOptionAssetTypeSchema.optional(),
+        assetTypes: z.array(contractOptionAssetTypeSchema).min(1).max(CONTRACT_OPTION_ASSET_TYPES.length).optional(),
       },
       annotations: READ_TOOL_ANNOTATIONS,
     },
@@ -969,6 +1105,95 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_review_strategy_positions', input, async () =>
         jsonToolResult(await reviewStrategyPositions(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_account_status_report',
+    {
+      title: 'Account Status Report',
+      description:
+        'Read-only account snapshot and daily status report. Fetches session, account, balance, open positions, and orders, writes an optional dated local snapshot, and compares against the previous snapshot for day-by-day deltas.',
+      inputSchema: accountStatusReportSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_account_status_report', input, async () =>
+        jsonToolResult(await accountStatusReport(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_register_strategy',
+    {
+      title: 'Register Strategy',
+      description:
+        'Create or update a local SQLite strategy registry entry with thesis, rules, and expected legs. This is local state only; it does not call Saxo or place orders.',
+      inputSchema: registerStrategySchema.shape,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_register_strategy', input, async () =>
+        jsonToolResult(registerStrategy(input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_list_strategies',
+    {
+      title: 'List Strategies',
+      description:
+        'List local SQLite strategy registry entries, optionally filtered by account, symbol, or status.',
+      inputSchema: listStrategiesSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_list_strategies', input, async () =>
+        jsonToolResult(listStrategies(input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_get_strategy',
+    {
+      title: 'Get Strategy',
+      description: 'Fetch one local SQLite strategy registry entry by strategyId.',
+      inputSchema: getStrategySchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_strategy', input, async () =>
+        jsonToolResult(getStrategy(input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_import_trading_history',
+    {
+      title: 'Import Trading History',
+      description:
+        'Idempotently import local JSON trading artefacts into the SQLite ledger. Existing JSON files are left in place.',
+      inputSchema: importTradingHistorySchema.shape,
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_import_trading_history', input, async () =>
+        jsonToolResult(importTradingHistory(input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_trading_ledger_report',
+    {
+      title: 'Trading Ledger Report',
+      description:
+        'Read local SQLite ledger state: strategies, recent order events, account snapshots, and imported artefact counts.',
+      inputSchema: tradingLedgerReportSchema.shape,
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_trading_ledger_report', input, async () =>
+        jsonToolResult(tradingLedgerReport(input)),
       ),
   );
 
@@ -1269,10 +1494,21 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     },
     async input =>
       runAuditedTool(client, 'saxo_place_order', input, async () => {
-        const order = input as PlaceOrderInput;
+        const { order, ledger } = splitLedgerFields<PlaceOrderInput>(input);
         applyOrderPolicy(order);
         await maybeRunPrecheck(client, order);
         const result = await placeOrder(client, order);
+        recordOrderEvent({
+          environment: client.environment,
+          tool: 'saxo_place_order',
+          eventType: 'place',
+          accountKey: order.AccountKey,
+          strategyId: ledger.strategyId,
+          ledgerNote: ledger.ledgerNote,
+          dbPath: ledger.dbPath,
+          request: order,
+          result,
+        });
         return jsonToolResult(result);
       }),
   );
@@ -1288,7 +1524,7 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     },
     async input =>
       runAuditedTool(client, 'saxo_modify_order', input, async () => {
-        const order = input as ModifyOrderInput;
+        const { order, ledger } = splitLedgerFields<ModifyOrderInput>(input);
         applyOrderPolicy({
           AccountKey: order.AccountKey,
           Uic: order.Uic,
@@ -1298,7 +1534,19 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
           OrderPrice: order.OrderPrice,
           StopPrice: order.StopPrice,
         });
-        return jsonToolResult(await modifyOrder(client, order));
+        const result = await modifyOrder(client, order);
+        recordOrderEvent({
+          environment: client.environment,
+          tool: 'saxo_modify_order',
+          eventType: 'modify',
+          accountKey: order.AccountKey,
+          strategyId: ledger.strategyId,
+          ledgerNote: ledger.ledgerNote,
+          dbPath: ledger.dbPath,
+          request: order,
+          result,
+        });
+        return jsonToolResult(result);
       }),
   );
 
@@ -1310,13 +1558,27 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
       inputSchema: {
         orderIds: z.array(z.string().trim().min(1)).min(1).max(10),
         accountKey: z.string().trim().min(1),
+        ...ledgerFieldsSchema,
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async input =>
       runAuditedTool(client, 'saxo_cancel_order', input, async () => {
-        applyOrderPolicy({ AccountKey: input.accountKey });
-        return jsonToolResult(await cancelOrder(client, input));
+        const { order, ledger } = splitLedgerFields<{ orderIds: string[]; accountKey: string }>(input);
+        applyOrderPolicy({ AccountKey: order.accountKey });
+        const result = await cancelOrder(client, order);
+        recordOrderEvent({
+          environment: client.environment,
+          tool: 'saxo_cancel_order',
+          eventType: 'cancel',
+          accountKey: order.accountKey,
+          strategyId: ledger.strategyId,
+          ledgerNote: ledger.ledgerNote,
+          dbPath: ledger.dbPath,
+          request: order,
+          result,
+        });
+        return jsonToolResult(result);
       }),
   );
 
@@ -1325,13 +1587,13 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Precheck Multi-Leg Option Order',
       description:
-        'Validate a multi-leg option strategy (vertical/calendar spread, condor, straddle, etc.) without placing it. OrderType must be Limit; OrderPrice is always **positive** — the absolute limit price you are willing to pay (debit spreads) or receive (credit spreads). Saxo infers debit vs credit from the Buy/Sell direction of the legs and rejects negative OrderPrice with "Price cannot be negative." All legs must share the same option root.',
+        'Validate a multi-leg exchange-traded contract option strategy (vertical/calendar spread, condor, straddle, etc.) without placing it. Supports StockOption, IndexOption, StockIndexOption, and FuturesOption legs. OrderType must be Limit; OrderPrice is always **positive** — the absolute limit price you are willing to pay (debit spreads) or receive (credit spreads). Saxo infers debit vs credit from the Buy/Sell direction of the legs and rejects negative OrderPrice with "Price cannot be negative." All legs must share the same option root.',
       inputSchema: multiLegOrderSchema,
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async input =>
       runAuditedTool(client, 'saxo_precheck_multileg_order', input, async () => {
-        const order = input as PlaceMultiLegOrderInput;
+        const { order } = splitLedgerFields<PlaceMultiLegOrderInput>(input);
         applyMultiLegPolicy(order);
         return jsonToolResult(await precheckMultiLegOrder(client, order));
       }),
@@ -1342,16 +1604,28 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     {
       title: 'Place Multi-Leg Option Order',
       description:
-        'Place a multi-leg option strategy as one atomic order with a single limit price. OrderType must be Limit. OrderPrice is always positive — the absolute price you are willing to pay (debit) or receive (credit); Saxo infers direction from the legs. All legs must share the same option root (same underlying + expiry). Returns MultiLegOrderId plus per-leg OrderIds.',
+        'Place a multi-leg exchange-traded contract option strategy as one atomic order with a single limit price. Supports StockOption, IndexOption, StockIndexOption, and FuturesOption legs. OrderType must be Limit. OrderPrice is always positive — the absolute price you are willing to pay (debit) or receive (credit); Saxo infers direction from the legs. All legs must share the same option root (same underlying + expiry). Returns MultiLegOrderId plus per-leg OrderIds.',
       inputSchema: multiLegOrderSchema,
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async input =>
       runAuditedTool(client, 'saxo_place_multileg_order', input, async () => {
-        const order = input as PlaceMultiLegOrderInput;
+        const { order, ledger } = splitLedgerFields<PlaceMultiLegOrderInput>(input);
         applyMultiLegPolicy(order);
         await maybeRunMultiLegPrecheck(client, order);
-        return jsonToolResult(await placeMultiLegOrder(client, order));
+        const result = await placeMultiLegOrder(client, order);
+        recordOrderEvent({
+          environment: client.environment,
+          tool: 'saxo_place_multileg_order',
+          eventType: 'place',
+          accountKey: order.AccountKey,
+          strategyId: ledger.strategyId,
+          ledgerNote: ledger.ledgerNote,
+          dbPath: ledger.dbPath,
+          request: order,
+          result,
+        });
+        return jsonToolResult(result);
       }),
   );
 
@@ -1366,13 +1640,25 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     },
     async input =>
       runAuditedTool(client, 'saxo_modify_multileg_order', input, async () => {
-        const order = input as ModifyMultiLegOrderInput;
+        const { order, ledger } = splitLedgerFields<ModifyMultiLegOrderInput>(input);
         applyMultiLegPolicy({
           AccountKey: order.AccountKey,
           OrderPrice: order.OrderPrice,
           Legs: typeof order.Amount === 'number' ? [{ Amount: order.Amount }] : [],
         });
-        return jsonToolResult(await modifyMultiLegOrder(client, order));
+        const result = await modifyMultiLegOrder(client, order);
+        recordOrderEvent({
+          environment: client.environment,
+          tool: 'saxo_modify_multileg_order',
+          eventType: 'modify',
+          accountKey: order.AccountKey,
+          strategyId: ledger.strategyId,
+          ledgerNote: ledger.ledgerNote,
+          dbPath: ledger.dbPath,
+          request: order,
+          result,
+        });
+        return jsonToolResult(result);
       }),
   );
 
@@ -1384,13 +1670,27 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
       inputSchema: {
         multiLegOrderId: z.string().trim().min(1),
         accountKey: z.string().trim().min(1),
+        ...ledgerFieldsSchema,
       },
       annotations: WRITE_TOOL_ANNOTATIONS,
     },
     async input =>
       runAuditedTool(client, 'saxo_cancel_multileg_order', input, async () => {
-        applyMultiLegPolicy({ AccountKey: input.accountKey, Legs: [] });
-        return jsonToolResult(await cancelMultiLegOrder(client, input));
+        const { order, ledger } = splitLedgerFields<{ multiLegOrderId: string; accountKey: string }>(input);
+        applyMultiLegPolicy({ AccountKey: order.accountKey, Legs: [] });
+        const result = await cancelMultiLegOrder(client, order);
+        recordOrderEvent({
+          environment: client.environment,
+          tool: 'saxo_cancel_multileg_order',
+          eventType: 'cancel',
+          accountKey: order.accountKey,
+          strategyId: ledger.strategyId,
+          ledgerNote: ledger.ledgerNote,
+          dbPath: ledger.dbPath,
+          request: order,
+          result,
+        });
+        return jsonToolResult(result);
       }),
   );
 
@@ -1605,6 +1905,21 @@ function applyMultiLegPolicy(order: {
   checkMultiLegOrder(order, policy);
 }
 
+function splitLedgerFields<T>(input: Record<string, unknown>): {
+  order: T;
+  ledger: { strategyId?: string; ledgerNote?: string; dbPath?: string };
+} {
+  const { strategyId, ledgerNote, dbPath, ...order } = input;
+  return {
+    order: order as T,
+    ledger: {
+      strategyId: typeof strategyId === 'string' ? strategyId : undefined,
+      ledgerNote: typeof ledgerNote === 'string' ? ledgerNote : undefined,
+      dbPath: typeof dbPath === 'string' ? dbPath : undefined,
+    },
+  };
+}
+
 async function maybeRunPrecheck(client: SaxoClient, order: PlaceOrderInput): Promise<void> {
   if (!client.isLive()) {
     return;
@@ -1774,6 +2089,11 @@ function auditTarget(input: unknown): unknown {
     status: value.status,
     fromDate: value.fromDate,
     toDate: value.toDate,
+    outputDir: value.outputDir,
+    writeSnapshot: value.writeSnapshot,
+    compareWith: value.compareWith,
+    historyLimit: value.historyLimit,
+    probeHistoricalEndpoints: value.probeHistoricalEndpoints,
     fieldGroups: value.fieldGroups,
     query: value.query,
     limit: value.limit,

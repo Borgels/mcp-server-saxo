@@ -1,4 +1,10 @@
 import type { SaxoClient } from './client.js';
+import {
+  CONTRACT_OPTION_ASSET_TYPES,
+  isContractOptionAssetType,
+  normalizeContractOptionAssetTypes,
+  type ContractOptionAssetType,
+} from './contract-options.js';
 
 export interface SearchInstrumentsInput {
   keywords?: string;
@@ -234,11 +240,15 @@ export interface FindOptionLegInput {
   putCall: 'Call' | 'Put';
   /** Disambiguate ambiguous tickers (e.g. NOK on NYSE vs Helsinki). */
   exchangeId?: string;
+  /** Restrict option-root search to one contract option asset type. */
+  assetType?: ContractOptionAssetType;
+  /** Restrict option-root search to specific contract option asset types. Defaults to all exchange-traded contract options. */
+  assetTypes?: ContractOptionAssetType[];
 }
 
 export interface FoundOptionLeg {
   uic: number;
-  assetType: 'StockOption';
+  assetType: ContractOptionAssetType;
   symbol?: string;
   description?: string;
   optionRootId: number;
@@ -265,9 +275,13 @@ export async function findOptionLeg(
   input: FindOptionLegInput,
 ): Promise<FoundOptionLeg> {
   const warnings: string[] = [];
+  const assetTypes = normalizeContractOptionAssetTypes(
+    input.assetTypes ?? (input.assetType ? [input.assetType] : undefined),
+    CONTRACT_OPTION_ASSET_TYPES,
+  );
   const search = (await searchInstruments(client, {
     keywords: input.symbol,
-    assetTypes: ['StockOption'],
+    assetTypes,
     top: 20,
   })) as {
     Data?: Array<{
@@ -280,16 +294,16 @@ export async function findOptionLeg(
       CurrencyCode?: string;
     }>;
   };
-  const candidates = (search.Data ?? []).filter(d => d.AssetType === 'StockOption');
+  const candidates = (search.Data ?? []).filter(d => isContractOptionAssetType(d.AssetType));
   if (candidates.length === 0) {
-    throw new Error(`No StockOption root found for symbol "${input.symbol}".`);
+    throw new Error(`No contract option root found for symbol "${input.symbol}" and asset types ${assetTypes.join(', ')}.`);
   }
   let filtered = candidates;
   if (input.exchangeId) {
     filtered = candidates.filter(d => d.ExchangeId === input.exchangeId);
     if (filtered.length === 0) {
       throw new Error(
-        `No StockOption root for "${input.symbol}" on exchange "${input.exchangeId}". ` +
+        `No contract option root for "${input.symbol}" on exchange "${input.exchangeId}". ` +
           `Candidates without filter: ${candidates.map(c => `${c.Identifier}@${c.ExchangeId}`).join(', ')}`,
       );
     }
@@ -302,6 +316,7 @@ export async function findOptionLeg(
     );
   }
   const optionRootId = picked!.Identifier;
+  const assetType = picked!.AssetType as ContractOptionAssetType;
 
   const chainRaw = await getOptionChain(client, {
     optionRootId,
@@ -336,7 +351,7 @@ export async function findOptionLeg(
 
   return {
     uic,
-    assetType: 'StockOption',
+    assetType,
     symbol: picked!.Symbol,
     description: picked!.Description,
     optionRootId,

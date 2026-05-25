@@ -7,6 +7,7 @@ import type {
 import type { OptionStrategyKind } from './options.js';
 
 export type OptionsMode = 'guardrailed' | 'user_driven';
+export type ProfitOptimizationMode = 'standard' | 'convex_momentum';
 export type OptionThesisRole = 'core_conviction' | 'tactical_momentum' | 'income' | 'hedge' | 'speculative';
 export type OptionThesisHorizon = 'short_term' | 'swing' | 'long_term' | 'leaps';
 export type OptionPortfolioStructure =
@@ -54,6 +55,7 @@ export interface BuildOptionPortfolioPlanInput {
   optionScreen?: ScreenOptionStrategiesResult;
   optionTheses?: OptionThesisInput[];
   optionsMode: OptionsMode;
+  profitOptimizationMode?: ProfitOptimizationMode;
   riskBudgetPercentPerIdea: number;
   stockAllocations: StockAllocationCandidate[];
 }
@@ -317,7 +319,7 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
         entryTiming: entryTiming(plan),
         rationale: explainSelection(plan, thesis),
         deploymentRule: deploymentRule(plan, thesis, input.deploymentStyle),
-        exitRule: exitRule(plan),
+        exitRule: exitRule(plan, input.profitOptimizationMode ?? 'standard'),
         warnings: Array.from(new Set([
           ...(plan.keyRisks ?? []),
           ...plan.warnings,
@@ -404,7 +406,7 @@ function normalizeTheses(input: BuildOptionPortfolioPlanInput): Array<Required<O
       conviction: thesis.conviction ?? 'medium',
       directionalBias: thesis.directionalBias ?? 'bullish',
       horizon: thesis.horizon ?? 'swing',
-      preferredStructures: thesis.preferredStructures?.length ? thesis.preferredStructures : defaultStructures(thesis.horizon ?? 'swing'),
+      preferredStructures: thesis.preferredStructures?.length ? thesis.preferredStructures : defaultStructures(thesis.horizon ?? 'swing', input.profitOptimizationMode ?? 'standard'),
       targetRiskPercent: thesis.targetRiskPercent,
       maxRiskDollars: thesis.maxRiskDollars,
       notes: thesis.notes,
@@ -426,7 +428,9 @@ function normalizeTheses(input: BuildOptionPortfolioPlanInput): Array<Required<O
         conviction: 'medium',
         directionalBias: 'bullish',
         horizon: 'swing',
-        preferredStructures: ['debit_spread', 'put_credit_spread', 'call_credit_spread'],
+        preferredStructures: input.profitOptimizationMode === 'convex_momentum'
+          ? ['long_call', 'debit_spread']
+          : ['debit_spread', 'put_credit_spread', 'call_credit_spread'],
         targetRiskPercent: input.discoveryTargetRiskPercent,
         maxRiskDollars: undefined,
         notes: 'Automatically discovered from Saxo market and option screens; still subject to the same risk, liquidity, and Greeks gates.',
@@ -440,7 +444,9 @@ function normalizeTheses(input: BuildOptionPortfolioPlanInput): Array<Required<O
     conviction: 'medium',
     directionalBias: 'bullish',
     horizon: 'swing',
-    preferredStructures: ['debit_spread', 'put_credit_spread', 'call_credit_spread', 'cash_secured_put', 'iron_condor'],
+    preferredStructures: input.profitOptimizationMode === 'convex_momentum'
+      ? ['long_call', 'debit_spread']
+      : ['debit_spread', 'put_credit_spread', 'call_credit_spread', 'cash_secured_put', 'iron_condor'],
     targetRiskPercent: undefined,
     maxRiskDollars: undefined,
     notes: undefined,
@@ -468,7 +474,10 @@ function horizonMatches(plan: OptionPlan, horizon: OptionThesisHorizon): boolean
   return plan.daysToExpiry >= 180;
 }
 
-function defaultStructures(horizon: OptionThesisHorizon): OptionPortfolioStructure[] {
+function defaultStructures(horizon: OptionThesisHorizon, profitOptimizationMode: ProfitOptimizationMode): OptionPortfolioStructure[] {
+  if (profitOptimizationMode === 'convex_momentum') {
+    return ['long_call', 'debit_spread'];
+  }
   if (horizon === 'leaps' || horizon === 'long_term') {
     return ['long_call', 'debit_spread', 'diagonal'];
   }
@@ -573,7 +582,15 @@ function deploymentRule(plan: OptionPlan, thesis: ReturnType<typeof normalizeThe
   return 'Open only if live executable quote is at or better than the screened debit/credit and no catalyst risk has changed.';
 }
 
-function exitRule(plan: OptionPlan): string {
+function exitRule(plan: OptionPlan, profitOptimizationMode: ProfitOptimizationMode): string {
+  if (profitOptimizationMode === 'convex_momentum') {
+    if (plan.strategy === 'long_call') {
+      return 'Use fast-winner logic: trim only enough to de-risk, keep a runner while DTE and thesis remain favorable, and raise the stop after partial profit.';
+    }
+    if (plan.strategy === 'debit_spread') {
+      return 'Use DTE-aware profit optimization: trim or roll up on fast spot moves, but avoid closing the full spread early when substantial DTE and upside remain.';
+    }
+  }
   if (plan.estimatedCredit !== undefined) {
     return 'For short-premium structures, consider taking profit around 40-60% of max credit or closing if the short strike is threatened.';
   }

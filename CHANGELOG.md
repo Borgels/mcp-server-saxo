@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Convex momentum profit optimization for high-conviction option workflows:
+  `convex_momentum` option screening, `profitOptimizationMode` in portfolio
+  planning and strategy reviews, postmarket `currentUnderlyingOverrides`, and
+  draft-only trim order suggestions.
+- `saxo_account_status_report`, a read-only Saxo account snapshot reporter that
+  stores dated local JSON snapshots, aggregates net positions by underlying,
+  and compares against the previous snapshot for daily account-status deltas.
+- Local SQLite trading ledger and strategy registry using Node 24 `node:sqlite`:
+  `saxo_register_strategy`, `saxo_list_strategies`, `saxo_get_strategy`,
+  `saxo_import_trading_history`, and `saxo_trading_ledger_report`. Successful
+  order place/modify/cancel tools now auto-journal to the local ledger when
+  they complete.
+- Contract option support now covers exchange-traded `StockOption`,
+  `IndexOption`, `StockIndexOption`, and `FuturesOption` legs in discovery,
+  option planning, and multi-leg validation/place schemas, plus
+  `saxo_get_contract_option_trading_conditions` for account-specific margin,
+  tradability, settlement, fee, and scheduled-condition checks.
 - Durable OAuth token persistence for MCP clients: optional token-store JSON
   loading/writing via `SAXO_TOKEN_STORE_PATH`, automatic refresh persistence,
   refresh-token expiry tracking, and a `saxo_oauth_refresh` tool.

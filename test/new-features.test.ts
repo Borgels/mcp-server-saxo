@@ -223,6 +223,100 @@ describe('findOptionLeg compresses 4-step option discovery into one call', () =>
     expect(leg.optionRootId).toBe(680);
     expect(leg.warnings).toEqual([]); // single match after filter, no ambiguity
   });
+
+  it('can restrict discovery to non-stock contract option roots', async () => {
+    const { findOptionLeg } = await import('../src/saxo/reference.js');
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname.endsWith('/ref/v1/instruments')) {
+        expect(parsed.searchParams.get('AssetTypes')).toBe('IndexOption');
+        return new Response(
+          JSON.stringify({
+            Data: [
+              {
+                AssetType: 'IndexOption',
+                Identifier: 9001,
+                ExchangeId: 'CBOE',
+                CanParticipateInMultiLegOrder: true,
+                Symbol: 'SPX:xcbf',
+                CurrencyCode: 'USD',
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      if (parsed.pathname.endsWith('/ref/v1/instruments/contractoptionspaces/9001')) {
+        return new Response(
+          JSON.stringify({
+            OptionSpace: [
+              {
+                Expiry: '2026-08-21',
+                SpecificOptions: [
+                  { Uic: 99001, StrikePrice: 6000, PutCall: 'Call', TradingStatus: 'Tradable' },
+                ],
+              },
+            ],
+          }),
+          { headers: { 'content-type': 'application/json' } },
+        );
+      }
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const leg = await findOptionLeg(client, {
+      symbol: 'SPX',
+      assetTypes: ['IndexOption'],
+      expiry: '2026-08-21',
+      strike: 6000,
+      putCall: 'Call',
+    });
+    expect(leg).toMatchObject({
+      uic: 99001,
+      assetType: 'IndexOption',
+      optionRootId: 9001,
+    });
+  });
+});
+
+describe('contract option trading conditions', () => {
+  it('calls the Saxo ContractOptionSpaces trading-conditions endpoint', async () => {
+    const { getContractOptionTradingConditions } = await import('../src/saxo/contract-options.js');
+    const fetchMock = vi.fn<typeof fetch>(async url => {
+      const parsed = new URL(String(url));
+      expect(parsed.pathname).toMatch(/\/openapi\/cs\/v1\/tradingconditions\/ContractOptionSpaces\/account-1\/1467$/);
+      expect(parsed.searchParams.get('Uic')).toBe('30256728');
+      expect(parsed.searchParams.get('FieldGroups')).toBe('ScheduledTradingConditions');
+      return new Response(
+        JSON.stringify({
+          AssetType: 'StockOption',
+          IsTradable: true,
+          SettlementStyle: 'PhysicalDelivery',
+          Uic: 30256728,
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      );
+    });
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'fake',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(getContractOptionTradingConditions(client, {
+      accountKey: 'account-1',
+      optionRootId: 1467,
+      uic: 30256728,
+      fieldGroups: ['ScheduledTradingConditions'],
+    })).resolves.toMatchObject({
+      IsTradable: true,
+      SettlementStyle: 'PhysicalDelivery',
+    });
+  });
 });
 
 describe('OAuth supports both Code-grant (with secret) and PKCE-grant (no secret) apps', () => {

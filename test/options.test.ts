@@ -155,6 +155,111 @@ describe('options tools', () => {
     expect(result.Data[0]?.maxProfit).toBeUndefined();
   });
 
+  it('plans non-stock contract options with their asset type and contract size', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (url, init) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname.endsWith('/ref/v1/instruments')) {
+        expect(parsed.searchParams.get('AssetTypes')).toBe('IndexOption');
+        return jsonResponse({
+          Data: [
+            {
+              AssetType: 'IndexOption',
+              CanParticipateInMultiLegOrder: true,
+              CurrencyCode: 'USD',
+              Description: 'S&P 500 Index',
+              ExchangeId: 'CBOE',
+              GroupOptionRootId: 9001,
+              Identifier: 9001,
+              SummaryType: 'ContractOptionRoot',
+              Symbol: 'SPX:xcbf',
+            },
+          ],
+        });
+      }
+      if (parsed.pathname.endsWith('/ref/v1/instruments/contractoptionspaces/9001')) {
+        return jsonResponse({
+          AssetType: 'IndexOption',
+          CanParticipateInMultiLegOrder: true,
+          ContractSize: 10,
+          CurrencyCode: 'USD',
+          DefaultOption: { UnderlyingUic: 5000 },
+          Description: 'S&P 500 Index',
+          Exchange: { ExchangeId: 'CBOE' },
+          ExerciseStyle: 'European',
+          OptionRootId: 9001,
+          OptionSpace: [
+            {
+              DisplayDaysToExpiry: 45,
+              Expiry: '2026-02-15',
+              SpecificOptions: [
+                { Uic: 91001, StrikePrice: 6000, PutCall: 'Call', TradingStatus: 'Tradable' },
+                { Uic: 91002, StrikePrice: 6100, PutCall: 'Call', TradingStatus: 'Tradable' },
+              ],
+            },
+          ],
+        });
+      }
+      if (parsed.pathname.endsWith('/trade/v1/infoprices')) {
+        expect(parsed.searchParams.get('AssetType')).toBe('StockIndex');
+        return jsonResponse({ Quote: { Bid: 5999, Ask: 6001, Mid: 6000 }, Uic: 5000 });
+      }
+      if (parsed.pathname.endsWith('/trade/v1/infoprices/list')) {
+        expect(parsed.searchParams.get('AssetType')).toBe('IndexOption');
+        const uics = (parsed.searchParams.get('Uics') ?? '').split(',').map(Number);
+        return jsonResponse({ Data: uics.map(uic => ({
+          Uic: uic,
+          Quote: { Bid: 48, Ask: 50, Mid: 49 },
+          InstrumentPriceDetails: { OpenInterest: 100 },
+          Greeks: { Delta: 0.52, Gamma: 0.01, Theta: -2, Vega: 4 },
+        })) });
+      }
+      if (parsed.pathname.endsWith('/trade/v1/prices/subscriptions')) {
+        const body = JSON.parse(String(init?.body));
+        expect(body.Arguments.AssetType).toBe('IndexOption');
+        return jsonResponse({
+          Snapshot: {
+            Quote: { Bid: 48, Ask: 50, Mid: 49 },
+            Greeks: { Delta: 0.52, Gamma: 0.01, Theta: -2, Vega: 4 },
+          },
+        });
+      }
+      if (parsed.pathname.includes('/trade/v1/prices/subscriptions/')) {
+        return jsonResponse({});
+      }
+      throw new Error(`Unexpected request ${init?.method ?? 'GET'} ${parsed.pathname}`);
+    });
+    const client = testClient(fetchMock as unknown as typeof fetch);
+
+    const result = await planOptionStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        keywords: 'SPX',
+        assetTypes: ['IndexOption'],
+        underlyingAssetType: 'StockIndex',
+        strategies: ['long_call'],
+        maxCandidates: 1,
+        minOpenInterest: 0,
+        maxSpreadPercent: 100,
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.optionRoot).toMatchObject({
+      optionRootId: 9001,
+      assetType: 'IndexOption',
+      contractSize: 10,
+      underlyingPrice: 6000,
+    });
+    expect(result.Data[0]).toMatchObject({
+      strategy: 'long_call',
+      contractSize: 10,
+      maxLoss: 500,
+      legs: [expect.objectContaining({ assetType: 'IndexOption' })],
+      singleLegPrecheckInput: expect.objectContaining({ AssetType: 'IndexOption' }),
+    });
+  });
+
   it('filters strategies that open short option legs when disabled', async () => {
     const fetchMock = optionFetchMock();
     const client = testClient(fetchMock);

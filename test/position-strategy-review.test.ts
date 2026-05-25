@@ -179,6 +179,68 @@ describe('reviewStrategyPositions', () => {
     expect(result.reviews[0]?.triggeredRules.join(' ')).toContain('Thesis invalidation');
   });
 
+  it('adds convex-momentum profit optimization with postmarket overrides and trim drafts', async () => {
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'token',
+      fetchImpl: followUpFetchMock(),
+    });
+
+    const result = await reviewStrategyPositions(
+      client,
+      {
+        accountKey: 'account-1',
+        profitOptimizationMode: 'convex_momentum',
+        currentUnderlyingOverrides: { AAA: 112 },
+        defaultRules: {
+          profitTakePercentOfMaxProfit: 50,
+        },
+        strategyPositions: [
+          {
+            name: 'AAA fast winner call debit spread',
+            symbol: 'AAA',
+            strategy: 'debit_spread',
+            openedAt: '2026-01-01T00:00:00.000Z',
+            entryNetDebit: 2,
+            entryMaxRisk: 600,
+            entryMaxProfit: 900,
+            entryUnderlyingPrice: 100,
+            legs: [
+              { uic: 101, buySell: 'Buy', amount: 3, expiry: '2026-07-17', putCall: 'Call', strike: 100 },
+              { uic: 102, buySell: 'Sell', amount: 3, expiry: '2026-07-17', putCall: 'Call', strike: 105 },
+            ],
+          },
+        ],
+      },
+      new Date('2026-01-02T00:00:00.000Z'),
+    );
+
+    expect(result.reviews[0]).toMatchObject({
+      verdict: 'consider_trim',
+      currentUnderlyingPrice: 112,
+      currentUnderlyingPriceSource: 'caller_override',
+      dteFractionElapsed: expect.any(Number),
+      profitVelocity: expect.any(Number),
+      remainingOptionalityScore: expect.any(Number),
+      profitOptimization: expect.objectContaining({
+        mode: 'convex_momentum',
+        action: 'trim_and_roll',
+        trimFraction: 1 / 3,
+        runnerFraction: 0.67,
+        regretAsymmetry: true,
+      }),
+    });
+    expect(result.reviews[0]?.profitOptimization?.orderDrafts[0]).toMatchObject({
+      draftOnly: true,
+      action: 'trim',
+      legs: [
+        { Uic: 101, BuySell: 'Sell', Amount: 1, ToOpenClose: 'ToClose' },
+        { Uic: 102, BuySell: 'Buy', Amount: 1, ToOpenClose: 'ToClose' },
+      ],
+    });
+    expect(result.reviews[0]?.profitOptimization?.rationale.join(' ')).toContain('caller_override');
+  });
+
   it('loads strategy positions from a saved snapshot path', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'saxo-strategy-'));
     const snapshotPath = join(dir, 'strategy-snapshot.json');

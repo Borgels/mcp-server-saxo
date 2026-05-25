@@ -26,12 +26,14 @@ import {
 export type PortfolioObjective = 'balanced_growth_income' | 'income_options' | 'capital_preservation' | 'growth';
 export type DeploymentStyle = 'staged' | 'immediate' | 'watchlist';
 export type PortfolioProfile = 'balanced' | 'concentrated_conviction';
+export type ProfitOptimizationMode = 'standard' | 'convex_momentum';
 
 export interface PlanPortfolioStrategyInput {
   accountKey: string;
   objective?: PortfolioObjective;
   riskProfile?: RiskProfile;
   portfolioProfile?: PortfolioProfile;
+  profitOptimizationMode?: ProfitOptimizationMode;
   deploymentStyle?: DeploymentStyle;
   targetInvestedPercent?: number;
   cashReservePercent?: number;
@@ -80,6 +82,7 @@ export interface PortfolioStrategyResult {
     objective: PortfolioObjective;
     riskProfile: RiskProfile;
     portfolioProfile: PortfolioProfile;
+    profitOptimizationMode: ProfitOptimizationMode;
     deploymentStyle: DeploymentStyle;
     targetInvestedPercent: number;
     cashReservePercent: number;
@@ -150,6 +153,10 @@ export interface PortfolioStrategyResult {
     sectorExposure: Record<string, number>;
     cashAfterPlan?: number;
     warnings: string[];
+    cappedUpsideRiskPercent?: number;
+    uncappedConvexityRiskPercent?: number;
+    runnerRiskPercent?: number;
+    profitOptimizationWarnings: string[];
   };
   stockAllocationPlan: Array<{
     rank: number;
@@ -202,6 +209,7 @@ export async function planPortfolioStrategy(
   const objective = input.objective ?? 'balanced_growth_income';
   const riskProfile = input.riskProfile ?? 'balanced';
   const portfolioProfile = input.portfolioProfile ?? 'balanced';
+  const profitOptimizationMode = input.profitOptimizationMode ?? 'standard';
   const deploymentStyle = input.deploymentStyle ?? 'staged';
   const targetInvestedPercent = clampNumber(input.targetInvestedPercent ?? defaultTargetInvested(objective, riskProfile), 1, 100);
   const configuredCashReservePercent = clampNumber(input.cashReservePercent ?? defaultCashReserve(objective, riskProfile), 0, 95);
@@ -264,6 +272,7 @@ export async function planPortfolioStrategy(
       maxSingleNamePercent,
       maxThetaDailyPercentOfRisk,
       objective,
+      profitOptimizationMode,
       allowShortOptionLegs,
       requireGreeks,
       riskBudgetPercentPerIdea,
@@ -322,6 +331,7 @@ export async function planPortfolioStrategy(
     discoverOptionCandidates,
     discoveryTargetRiskPercent: input.optionDiscoveryTargetRiskPercent,
     optionsMode,
+    profitOptimizationMode,
     riskBudgetPercentPerIdea,
     stockAllocations: stockAllocationPlan,
   });
@@ -358,6 +368,7 @@ export async function planPortfolioStrategy(
       objective,
       riskProfile,
       portfolioProfile,
+      profitOptimizationMode,
       deploymentStyle,
       targetInvestedPercent,
       cashReservePercent,
@@ -425,6 +436,7 @@ export async function planPortfolioStrategy(
       sectorExposure: summarizeSectorExposure(stockAllocationPlan),
       cashAfterPlan: roundMoney(cashAfterPlan),
       warnings: riskDashboardWarnings,
+      ...profitOptimizationDashboard(optionsPortfolioPlan, profitOptimizationMode),
     },
     stockAllocationPlan,
     optionAllocationPlan,
@@ -448,6 +460,7 @@ async function screenPortfolioOptions(
     maxSingleNamePercent: number;
     maxThetaDailyPercentOfRisk?: number;
     objective: PortfolioObjective;
+    profitOptimizationMode: ProfitOptimizationMode;
     allowShortOptionLegs: boolean;
     requireGreeks: boolean;
     riskBudgetPercentPerIdea: number;
@@ -479,7 +492,7 @@ async function screenPortfolioOptions(
   const discoveryScreen = shouldRunDiscovery
     ? await screenOptionStrategies(client, {
       ...baseOptionScreenInput(options),
-      playbook: options.input.optionDiscoveryPlaybook ?? discoveryOptionPlaybook(options.objective, options.riskProfile),
+      playbook: options.input.optionDiscoveryPlaybook ?? discoveryOptionPlaybook(options.objective, options.riskProfile, options.profitOptimizationMode),
       underlyingUniverse: options.input.optionDiscoveryUniverse ?? 'auto',
       underlyingPreset: options.input.optionDiscoveryPreset,
       maxUnderlyings: options.input.optionDiscoveryMaxUnderlyings ?? 50,
@@ -501,10 +514,13 @@ function baseOptionScreenInput(options: {
   requireGreeks: boolean;
   riskBudgetPercentPerIdea: number;
   riskProfile: RiskProfile;
+  profitOptimizationMode: ProfitOptimizationMode;
 }): Parameters<typeof screenOptionStrategies>[1] {
   return {
     accountKey: options.input.accountKey,
-    riskProfile: options.riskProfile,
+    riskProfile: options.profitOptimizationMode === 'convex_momentum' && options.riskProfile !== 'conservative'
+      ? 'aggressive'
+      : options.riskProfile,
     includeAccountContext: true,
     riskBudgetPercent: options.riskBudgetPercentPerIdea,
     maxPortfolioRiskPercent: options.maxOptionsRiskPercent,
@@ -517,13 +533,19 @@ function baseOptionScreenInput(options: {
 }
 
 function explicitOptionPlaybook(input: PlanPortfolioStrategyInput, objective: PortfolioObjective): StrategyPlaybook {
+  if (input.profitOptimizationMode === 'convex_momentum') {
+    return 'convex_momentum';
+  }
   if (input.optionTheses?.length) {
     return 'leaps_replacement';
   }
   return objective === 'income_options' ? 'income_30_60d' : 'quality_put_write';
 }
 
-function discoveryOptionPlaybook(objective: PortfolioObjective, riskProfile: RiskProfile): StrategyPlaybook {
+function discoveryOptionPlaybook(objective: PortfolioObjective, riskProfile: RiskProfile, profitOptimizationMode: ProfitOptimizationMode): StrategyPlaybook {
+  if (profitOptimizationMode === 'convex_momentum') {
+    return 'convex_momentum';
+  }
   if (objective === 'income_options') {
     return 'income_30_60d';
   }
@@ -755,6 +777,36 @@ function buildPortfolioBriefs(
     });
   }
   return briefs;
+}
+
+function profitOptimizationDashboard(
+  plan: OptionsPortfolioPlan | undefined,
+  mode: ProfitOptimizationMode,
+): Pick<PortfolioStrategyResult['riskDashboard'], 'cappedUpsideRiskPercent' | 'uncappedConvexityRiskPercent' | 'runnerRiskPercent' | 'profitOptimizationWarnings'> {
+  const total = plan?.usedRisk;
+  const selected = plan?.selectedCandidates ?? [];
+  const cappedRisk = sum(selected
+    .filter(candidate => candidate.strategy !== 'long_call')
+    .map(candidate => candidate.plannedRisk ?? 0));
+  const uncappedRisk = sum(selected
+    .filter(candidate => candidate.strategy === 'long_call')
+    .map(candidate => candidate.plannedRisk ?? 0));
+  const runnerRisk = sum(selected
+    .filter(candidate => candidate.strategy === 'long_call' || (candidate.daysToExpiry ?? 0) >= 120)
+    .map(candidate => candidate.plannedRisk ?? 0));
+  const warnings: string[] = [];
+  if (mode === 'convex_momentum' && selected.length > 0 && uncappedRisk === 0) {
+    warnings.push('Convex momentum mode selected only capped option structures; review whether a runner leg or wider upside structure is needed.');
+  }
+  if (mode === 'convex_momentum' && selected.length > 0 && runnerRisk === 0) {
+    warnings.push('Convex momentum mode has no long-DTE or uncapped runner exposure.');
+  }
+  return {
+    cappedUpsideRiskPercent: percentOf(cappedRisk, total),
+    uncappedConvexityRiskPercent: percentOf(uncappedRisk, total),
+    runnerRiskPercent: percentOf(runnerRisk, total),
+    profitOptimizationWarnings: warnings,
+  };
 }
 
 function buildStockAllocationPlan(
@@ -1086,6 +1138,13 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function round(value: number | undefined): number | undefined {
   return value === undefined || !Number.isFinite(value) ? undefined : Math.round(value * 100) / 100;
+}
+
+function percentOf(value: number | undefined, base: number | undefined): number | undefined {
+  if (value === undefined || base === undefined || base <= 0) {
+    return undefined;
+  }
+  return round(value / base * 100);
 }
 
 function roundMoney(value: number | undefined): number | undefined {
