@@ -26,6 +26,10 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_screen_stock_strategies',
   'saxo_plan_portfolio_strategy',
   'saxo_review_strategy_positions',
+  'saxo_account_status_report',
+  'saxo_list_strategies',
+  'saxo_get_strategy',
+  'saxo_trading_ledger_report',
   'saxo_list_accounts',
   'saxo_get_balance',
   'saxo_list_positions',
@@ -61,7 +65,13 @@ const OAUTH_TOOLS = new Set([
   'saxo_oauth_login',
   'saxo_oauth_start',
   'saxo_oauth_complete',
+  'saxo_oauth_refresh',
   'saxo_oauth_cancel',
+]);
+
+const LOCAL_STATE_TOOLS = new Set([
+  'saxo_register_strategy',
+  'saxo_import_trading_history',
 ]);
 
 export interface SaxoPolicy {
@@ -152,6 +162,10 @@ export function checkToolAllowed(context: ToolPolicyContext): PolicyDecision {
 
   if (OAUTH_TOOLS.has(tool)) {
     return { allowed: true, reason: 'OAuth credential management tool' };
+  }
+
+  if (LOCAL_STATE_TOOLS.has(tool)) {
+    return { allowed: true, reason: 'local SQLite state tool' };
   }
 
   if (ALERT_WRITE_TOOLS.has(tool)) {

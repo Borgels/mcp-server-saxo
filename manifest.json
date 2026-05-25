@@ -4,7 +4,7 @@
   "display_name": "Saxo Bank OpenAPI",
   "version": "0.2.2",
   "description": "MCP server for Saxo Bank's OpenAPI. SIM by default, LIVE behind explicit opt-in.",
-  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, single-leg and multi-leg option orders, Saxo price alerts, and OAuth login. LIVE trading is denied by default; SIM is the default environment. All write tools run through a policy + audit stack with default-deny semantics on LIVE.",
+  "long_description": "Exposes the Saxo Bank OpenAPI to MCP-compatible agents over stdio. Tools cover account/portfolio reads, instrument and option-chain reference data, snapshot quotes, strategy screeners, whole-account portfolio planning, local SQLite strategy/ledger state, single-leg and multi-leg option orders, Saxo price alerts, and OAuth login. LIVE trading is denied by default; SIM is the default environment. Saxo write tools run through a policy + audit stack with default-deny semantics on LIVE.",
   "author": {
     "name": "Borgels",
     "url": "https://github.com/Borgels"
@@ -29,7 +29,7 @@
   "compatibility": {
     "platforms": ["darwin", "win32", "linux"],
     "runtimes": {
-      "node": ">=20.11"
+      "node": ">=24.0"
     }
   },
   "server": {
@@ -43,12 +43,18 @@
         "SAXO_ACCESS_TOKEN": "${user_config.SAXO_ACCESS_TOKEN}",
         "SAXO_REFRESH_TOKEN": "${user_config.SAXO_REFRESH_TOKEN}",
         "SAXO_TOKEN_EXPIRES_AT": "${user_config.SAXO_TOKEN_EXPIRES_AT}",
+        "SAXO_REFRESH_TOKEN_EXPIRES_AT": "${user_config.SAXO_REFRESH_TOKEN_EXPIRES_AT}",
         "SAXO_APP_KEY": "${user_config.SAXO_APP_KEY}",
         "SAXO_APP_SECRET": "${user_config.SAXO_APP_SECRET}",
         "SAXO_REDIRECT_URI": "${user_config.SAXO_REDIRECT_URI}",
+        "SAXO_TOKEN_STORE_PATH": "${user_config.SAXO_TOKEN_STORE_PATH}",
+        "SAXO_PERSIST_TOKENS_ON_REFRESH": "${user_config.SAXO_PERSIST_TOKENS_ON_REFRESH}",
+        "SAXO_TOKEN_ENV_FILE_PATH": "${user_config.SAXO_TOKEN_ENV_FILE_PATH}",
         "SAXO_TIMEOUT_MS": "${user_config.SAXO_TIMEOUT_MS}",
         "ALPHA_VANTAGE_API_KEY": "${user_config.ALPHA_VANTAGE_API_KEY}",
         "SAXO_STRATEGY_SNAPSHOT_PATH": "${user_config.SAXO_STRATEGY_SNAPSHOT_PATH}",
+        "SAXO_TRADING_DB_PATH": "${user_config.SAXO_TRADING_DB_PATH}",
+        "SAXO_ACCOUNT_STATUS_DIR": "${user_config.SAXO_ACCOUNT_STATUS_DIR}",
         "SAXO_ENABLE_LIVE_TRADING": "${user_config.SAXO_ENABLE_LIVE_TRADING}",
         "SAXO_ENABLE_LIVE_ALERT_WRITES": "${user_config.SAXO_ENABLE_LIVE_ALERT_WRITES}",
         "SAXO_POLICY_PATH": "${user_config.SAXO_POLICY_PATH}",
@@ -84,6 +90,12 @@
       "description": "Optional. If set, lets the client refresh proactively. Otherwise computed from the JWT exp claim.",
       "required": false
     },
+    "SAXO_REFRESH_TOKEN_EXPIRES_AT": {
+      "type": "string",
+      "title": "Refresh-token expiry (ISO 8601)",
+      "description": "Optional. Stored by OAuth login/refresh when Saxo returns refresh_token_expires_in; used only for diagnostics and warnings.",
+      "required": false
+    },
     "SAXO_APP_KEY": {
       "type": "string",
       "title": "App key",
@@ -105,6 +117,25 @@
       "required": false,
       "default": "http://localhost:8765/callback"
     },
+    "SAXO_TOKEN_STORE_PATH": {
+      "type": "string",
+      "title": "Token-store JSON path",
+      "description": "Optional. JSON file path where OAuth tools and automatic refresh can persist rotated Saxo tokens. Useful for MCPB / desktop clients where editing .env files is awkward.",
+      "required": false
+    },
+    "SAXO_PERSIST_TOKENS_ON_REFRESH": {
+      "type": "boolean",
+      "title": "Persist tokens on refresh",
+      "description": "When true, automatic request-time refresh writes rotated tokens to SAXO_TOKEN_ENV_FILE_PATH (or .env). SAXO_TOKEN_STORE_PATH is written whenever configured.",
+      "required": false,
+      "default": false
+    },
+    "SAXO_TOKEN_ENV_FILE_PATH": {
+      "type": "string",
+      "title": "Token env file path",
+      "description": "Optional env file used when SAXO_PERSIST_TOKENS_ON_REFRESH=true or when OAuth tools are called with writeToEnvFile=true and no explicit envFilePath.",
+      "required": false
+    },
     "SAXO_TIMEOUT_MS": {
       "type": "number",
       "title": "Request timeout (ms)",
@@ -125,6 +156,18 @@
       "type": "file",
       "title": "Strategy snapshot path",
       "description": "Optional. JSON file used by saxo_review_strategy_positions when the tool call does not pass strategyPositions or strategySnapshotPath. Leave blank for account-status-only reviews or pass strategyPositions directly.",
+      "required": false
+    },
+    "SAXO_TRADING_DB_PATH": {
+      "type": "file",
+      "title": "Trading SQLite DB path",
+      "description": "Optional local SQLite database path for strategy registry, order ledger, imported artefacts, and account snapshots. Defaults to ./saxo-trading.sqlite.",
+      "required": false
+    },
+    "SAXO_ACCOUNT_STATUS_DIR": {
+      "type": "directory",
+      "title": "Account status snapshot directory",
+      "description": "Optional local directory where saxo_account_status_report writes dated JSON snapshots. SQLite snapshots are controlled by SAXO_TRADING_DB_PATH.",
       "required": false
     },
     "SAXO_ENABLE_LIVE_TRADING": {

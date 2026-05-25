@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SaxoClient, type SaxoClientOptions } from './saxo/client.js';
+import { persistTokensFromRuntimeConfig } from './saxo/token-persistence.js';
 import { registerSaxoTools } from './tools/saxo.js';
 
 export interface CreateServerOptions {
@@ -18,7 +19,13 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
     version: PACKAGE_VERSION,
   });
 
-  const client = options.client ?? new SaxoClient(options.clientOptions);
+  const clientOptions = options.clientOptions ?? {};
+  const client = options.client ?? new SaxoClient({
+    ...clientOptions,
+    onTokensRefreshed: clientOptions.onTokensRefreshed ?? (async (tokens, environment) => {
+      await persistTokensFromRuntimeConfig(environment, tokens);
+    }),
+  });
   registerSaxoTools(server, client);
 
   return server;

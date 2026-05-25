@@ -8,6 +8,7 @@ import {
   startOauthFlow,
 } from '../saxo/oauth.js';
 import { resolveEnvironment, type SaxoEnvironment } from '../saxo/environment.js';
+import { tokenEnvEntries } from '../saxo/token-persistence.js';
 
 interface CliOptions {
   environment: SaxoEnvironment;
@@ -30,16 +31,7 @@ async function main(): Promise<void> {
 
   const { tokens } = await completeOauthFlow(flow.ticketId, options.timeoutMs);
 
-  const entries: Record<string, string> = {
-    SAXO_ENVIRONMENT: flow.environment,
-    SAXO_ACCESS_TOKEN: tokens.accessToken,
-  };
-  if (tokens.refreshToken) {
-    entries.SAXO_REFRESH_TOKEN = tokens.refreshToken;
-  }
-  if (tokens.expiresAt) {
-    entries.SAXO_TOKEN_EXPIRES_AT = new Date(tokens.expiresAt).toISOString();
-  }
+  const entries = tokenEnvEntries(flow.environment, tokens);
 
   if (options.print) {
     for (const [key, value] of Object.entries(entries)) {

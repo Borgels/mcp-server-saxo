@@ -44,7 +44,7 @@
   "author": "Borgels",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=20.11"
+    "node": ">=24.0"
   },
   "publishConfig": {
     "access": "public",

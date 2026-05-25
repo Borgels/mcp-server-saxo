@@ -150,6 +150,37 @@ describe('screenOptionStrategies', () => {
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/port/v1/positions'))).toBe(true);
   });
 
+  it('adds convex momentum playbook scores for runner-friendly option candidates', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await screenOptionStrategies(
+      client,
+      {
+        accountKey: 'account-1',
+        symbols: ['AAA'],
+        playbook: 'convex_momentum',
+        riskProfile: 'aggressive',
+        strategies: ['long_call', 'debit_spread'],
+        minDte: 1,
+        maxDte: 365,
+        maxSymbolsToPlan: 1,
+        maxPlans: 4,
+        minOpenInterest: 10,
+        maxSpreadPercent: 40,
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.filters.playbook).toBe('convex_momentum');
+    expect(result.filters.playbookNotes.join(' ')).toContain('Convex momentum');
+    expect(result.Data.some(plan => plan.strategy === 'long_call')).toBe(true);
+    expect(result.Data[0]?.rankingBreakdown).toMatchObject({
+      upsideCaptureScore: expect.any(Number),
+      runnerSuitabilityScore: expect.any(Number),
+      finalScore: expect.any(Number),
+    });
+  });
+
   it('marks plans too large when an explicit risk budget cannot support one contract', async () => {
     const client = testClient(strategyScreenerFetchMock());
 
@@ -554,6 +585,40 @@ describe('screenOptionStrategies', () => {
       symbol: 'MISS',
       reason: expect.stringContaining('No StockOption root'),
     });
+  });
+
+  it('passes convex momentum mode through portfolio planning and reports runner exposure', async () => {
+    const client = testClient(strategyScreenerFetchMock());
+
+    const result = await planPortfolioStrategy(
+      client,
+      {
+        accountKey: 'account-1',
+        includeStocks: false,
+        includeOptions: true,
+        profitOptimizationMode: 'convex_momentum',
+        deploymentStyle: 'immediate',
+        optionTheses: [
+          {
+            name: 'AAA momentum',
+            symbols: ['AAA'],
+            horizon: 'swing',
+            conviction: 'high',
+            preferredStructures: ['long_call', 'debit_spread'],
+            targetRiskPercent: 5,
+          },
+        ],
+        maxOptionsRiskPercent: 10,
+        maxSingleTradeRiskPercent: 10,
+        riskBudgetPercentPerIdea: 10,
+      },
+      new Date('2026-01-01T00:00:00.000Z'),
+    );
+
+    expect(result.filters.profitOptimizationMode).toBe('convex_momentum');
+    expect(result.optionScreen?.filters.playbook).toBe('convex_momentum');
+    expect(result.riskDashboard.profitOptimizationWarnings).toEqual(expect.any(Array));
+    expect(result.riskDashboard.runnerRiskPercent).toEqual(expect.any(Number));
   });
 });
 

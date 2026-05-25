@@ -5,6 +5,13 @@ import {
   type VolatilityRegime,
 } from './option-volatility.js';
 import type { MarketNewsContext, MarketSentiment } from './market-context.js';
+import {
+  DEFAULT_CONTRACT_OPTION_ASSET_TYPE,
+  isContractOptionAssetType,
+  normalizeContractOptionAssetType,
+  normalizeContractOptionAssetTypes,
+  type ContractOptionAssetType,
+} from './contract-options.js';
 
 export type OptionStrategyKind =
   | 'cash_secured_put'
@@ -29,7 +36,10 @@ export interface ExternalStrategyContext {
 export interface GetOptionChainInput {
   keywords?: string;
   optionRootId?: number;
+  assetType?: ContractOptionAssetType;
+  assetTypes?: ContractOptionAssetType[];
   accountKey?: string;
+  underlyingAssetType?: string;
   minDte?: number;
   maxDte?: number;
   strikeWindowPercent?: number;
@@ -168,7 +178,7 @@ interface PriceSubscriptionResponse {
 }
 
 interface OptionContract {
-  assetType: 'StockOption';
+  assetType: ContractOptionAssetType;
   ask?: number;
   askSize?: number;
   bid?: number;
@@ -197,7 +207,7 @@ interface OptionContract {
 export interface OptionChainResult {
   optionRoot: {
     optionRootId: number;
-    assetType: string;
+    assetType: ContractOptionAssetType;
     description?: string;
     symbol?: string;
     exchangeId?: string;
@@ -224,7 +234,7 @@ export interface OptionChainResult {
 
 interface StrategyLeg {
   amount: number;
-  assetType: 'StockOption';
+  assetType: ContractOptionAssetType;
   buySell: 'Buy' | 'Sell';
   putCall: PutCall;
   strikePrice: number;
@@ -312,11 +322,12 @@ export async function getOptionChain(
     `/ref/v1/instruments/contractoptionspaces/${encodeURIComponent(String(root.optionRootId))}`,
     { AccountKey: input.accountKey },
   );
+  const assetType = normalizeContractOptionAssetType(space.AssetType ?? root.assetType);
   const contractSize = space.ContractSize ?? 100;
   const warnings: string[] = [];
   const underlyingUic = space.DefaultOption?.UnderlyingUic;
   const underlyingPrice = underlyingUic
-    ? await fetchUnderlyingPrice(client, underlyingUic, input.accountKey, warnings)
+    ? await fetchUnderlyingPrice(client, underlyingUic, input.accountKey, warnings, input.underlyingAssetType)
     : undefined;
 
   const minDte = input.minDte ?? 14;
@@ -354,7 +365,7 @@ export async function getOptionChain(
   return {
     optionRoot: {
       optionRootId: root.optionRootId,
-      assetType: space.AssetType ?? root.assetType,
+      assetType,
       description: space.Description ?? root.description,
       symbol: root.symbol,
       exchangeId: space.Exchange?.ExchangeId ?? root.exchangeId,
@@ -599,7 +610,7 @@ async function resolveOptionRoot(
   input: GetOptionChainInput,
 ): Promise<{
   optionRootId: number;
-  assetType: string;
+  assetType: ContractOptionAssetType;
   canParticipateInMultiLegOrder?: boolean;
   currencyCode?: string;
   description?: string;
@@ -609,28 +620,34 @@ async function resolveOptionRoot(
   if (typeof input.optionRootId === 'number') {
     return {
       optionRootId: input.optionRootId,
-      assetType: 'StockOption',
+      assetType: input.assetType ?? DEFAULT_CONTRACT_OPTION_ASSET_TYPE,
     };
   }
   if (!input.keywords?.trim()) {
-    throw new Error('Set either optionRootId or keywords to resolve a StockOption root.');
+    throw new Error('Set either optionRootId or keywords to resolve a contract option root.');
   }
+  const assetTypes = normalizeContractOptionAssetTypes(
+    input.assetTypes ?? (input.assetType ? [input.assetType] : undefined),
+  );
 
   const response = await client.get<Feed<OptionRootSearchResult>>('/ref/v1/instruments', {
     AccountKey: input.accountKey,
-    AssetTypes: 'StockOption',
+    AssetTypes: assetTypes.join(','),
     Keywords: input.keywords,
     $top: 10,
   });
   const root = chooseOptionRoot(response.Data ?? [], input.keywords);
 
   if (!root?.Identifier) {
-    throw new Error(`No StockOption root found for keywords=${JSON.stringify(input.keywords)}.`);
+    const label = assetTypes.length === 1 && assetTypes[0] === DEFAULT_CONTRACT_OPTION_ASSET_TYPE
+      ? 'StockOption'
+      : 'contract option';
+    throw new Error(`No ${label} root found for keywords=${JSON.stringify(input.keywords)}.`);
   }
 
   return {
     optionRootId: root.GroupOptionRootId ?? root.Identifier,
-    assetType: root.AssetType ?? 'StockOption',
+    assetType: normalizeContractOptionAssetType(root.AssetType),
     canParticipateInMultiLegOrder: root.CanParticipateInMultiLegOrder,
     currencyCode: root.CurrencyCode,
     description: root.Description,
@@ -645,7 +662,7 @@ function chooseOptionRoot(
 ): OptionRootSearchResult | undefined {
   const keyword = displayRootSymbol(keywords);
   return roots
-    .filter(item => typeof item.Identifier === 'number')
+    .filter(item => typeof item.Identifier === 'number' && isContractOptionAssetType(item.AssetType))
     .sort((a, b) => optionRootScore(b, keyword) - optionRootScore(a, keyword))
     .at(0);
 }
@@ -670,40 +687,47 @@ async function fetchUnderlyingPrice(
   uic: number,
   accountKey: string | undefined,
   warnings: string[],
+  underlyingAssetType = 'Stock',
 ): Promise<number | undefined> {
   try {
     const response = await client.get<InfoPrice>('/trade/v1/infoprices', {
       AccountKey: accountKey,
-      AssetType: 'Stock',
+      AssetType: underlyingAssetType,
       FieldGroups: 'DisplayAndFormat,PriceInfo,PriceInfoDetails,Quote',
       Uic: uic,
     });
     return response.Quote?.Mid ?? mid(response.Quote?.Bid, response.Quote?.Ask) ?? response.PriceInfoDetails?.LastTraded;
   } catch (error) {
-    warnings.push(`Could not fetch underlying stock price for Uic ${uic}: ${(error as Error).message}`);
+    warnings.push(`Could not fetch underlying ${underlyingAssetType} price for Uic ${uic}: ${(error as Error).message}`);
     return undefined;
   }
 }
 
 async function fetchOptionPrices(
   client: SaxoClient,
-  contracts: Array<{ uic: number }>,
+  contracts: Array<{ uic: number; assetType: ContractOptionAssetType }>,
   accountKey?: string,
 ): Promise<Map<number, InfoPrice>> {
   const prices = new Map<number, InfoPrice>();
-  for (const batch of chunk(contracts, 100)) {
-    if (batch.length === 0) {
-      continue;
-    }
-    const response = await client.get<Feed<InfoPrice>>('/trade/v1/infoprices/list', {
-      AccountKey: accountKey,
-      AssetType: 'StockOption',
-      FieldGroups: OPTION_PRICE_FIELD_GROUPS,
-      Uics: batch.map(contract => contract.uic).join(','),
-    });
-    for (const price of response.Data ?? []) {
-      if (typeof price.Uic === 'number') {
-        prices.set(price.Uic, price);
+  const byAssetType = new Map<ContractOptionAssetType, Array<{ uic: number; assetType: ContractOptionAssetType }>>();
+  for (const contract of contracts) {
+    byAssetType.set(contract.assetType, [...(byAssetType.get(contract.assetType) ?? []), contract]);
+  }
+  for (const [assetType, items] of byAssetType.entries()) {
+    for (const batch of chunk(items, 100)) {
+      if (batch.length === 0) {
+        continue;
+      }
+      const response = await client.get<Feed<InfoPrice>>('/trade/v1/infoprices/list', {
+        AccountKey: accountKey,
+        AssetType: assetType,
+        FieldGroups: OPTION_PRICE_FIELD_GROUPS,
+        Uics: batch.map(contract => contract.uic).join(','),
+      });
+      for (const price of response.Data ?? []) {
+        if (typeof price.Uic === 'number') {
+          prices.set(price.Uic, price);
+        }
       }
     }
   }
@@ -712,6 +736,7 @@ async function fetchOptionPrices(
 
 function flattenOptionSpace(space: ContractOptionSpace, now: Date): OptionContract[] {
   const contracts: OptionContract[] = [];
+  const assetType = normalizeContractOptionAssetType(space.AssetType);
   for (const expiry of space.OptionSpace ?? []) {
     const expiryDate = expiry.Expiry ?? expiry.DisplayExpiry;
     if (!expiryDate) {
@@ -727,7 +752,7 @@ function flattenOptionSpace(space: ContractOptionSpace, now: Date): OptionContra
         continue;
       }
       contracts.push({
-        assetType: 'StockOption',
+        assetType,
         daysToExpiry,
         expiry: expiryDate.slice(0, 10),
         putCall: option.PutCall,
@@ -855,7 +880,7 @@ function buildCashSecuredPuts(
     plan.singleLegPrecheckInput = {
       AccountKey: input.accountKey,
       Uic: put.uic,
-      AssetType: 'StockOption',
+      AssetType: put.assetType,
       BuySell: 'Sell',
       Amount: 1,
       OrderType: 'Limit',
@@ -891,7 +916,7 @@ function buildLongCalls(
     plan.singleLegPrecheckInput = {
       AccountKey: input.accountKey,
       Uic: call.uic,
-      AssetType: 'StockOption',
+      AssetType: call.assetType,
       BuySell: 'Buy',
       Amount: 1,
       OrderType: 'Limit',
@@ -1171,7 +1196,7 @@ function basePlan(
 function leg(contract: OptionContract, buySell: 'Buy' | 'Sell'): StrategyLeg {
   return {
     amount: 1,
-    assetType: 'StockOption',
+    assetType: contract.assetType,
     buySell,
     putCall: contract.putCall,
     strikePrice: contract.strikePrice,

@@ -4,6 +4,7 @@ export interface SaxoTokenSet {
   accessToken: string;
   refreshToken?: string;
   expiresAt?: number;
+  refreshTokenExpiresAt?: number;
 }
 
 // Build the token-endpoint POST body + headers. Supports both confidential
@@ -64,10 +65,12 @@ export async function refreshAccessToken(input: RefreshAccessTokenInput): Promis
   }
 
   const expiresIn = numberField(data, 'expires_in');
+  const refreshTokenExpiresIn = numberField(data, 'refresh_token_expires_in');
   return {
     accessToken,
     refreshToken: stringField(data, 'refresh_token') ?? input.refreshToken,
     expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
+    refreshTokenExpiresAt: refreshTokenExpiresIn ? Date.now() + refreshTokenExpiresIn * 1000 : undefined,
   };
 }
 
@@ -110,10 +113,12 @@ export async function exchangeCodeForTokens(input: ExchangeCodeInput): Promise<S
   }
 
   const expiresIn = numberField(data, 'expires_in');
+  const refreshTokenExpiresIn = numberField(data, 'refresh_token_expires_in');
   return {
     accessToken,
     refreshToken: stringField(data, 'refresh_token'),
     expiresAt: expiresIn ? Date.now() + expiresIn * 1000 : undefined,
+    refreshTokenExpiresAt: refreshTokenExpiresIn ? Date.now() + refreshTokenExpiresIn * 1000 : undefined,
   };
 }
 

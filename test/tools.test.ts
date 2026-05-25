@@ -52,6 +52,7 @@ describe('Saxo tool registration', () => {
       'saxo_get_instrument_details',
       'saxo_list_exchanges',
       'saxo_get_option_chain',
+      'saxo_get_contract_option_trading_conditions',
       'saxo_list_option_expiries',
       'saxo_list_standard_option_expiries',
       'saxo_find_option_leg',
@@ -66,6 +67,12 @@ describe('Saxo tool registration', () => {
       'saxo_screen_stock_strategies',
       'saxo_plan_portfolio_strategy',
       'saxo_review_strategy_positions',
+      'saxo_account_status_report',
+      'saxo_register_strategy',
+      'saxo_list_strategies',
+      'saxo_get_strategy',
+      'saxo_import_trading_history',
+      'saxo_trading_ledger_report',
       'saxo_list_accounts',
       'saxo_get_balance',
       'saxo_list_positions',
@@ -92,6 +99,7 @@ describe('Saxo tool registration', () => {
       'saxo_oauth_login',
       'saxo_oauth_start',
       'saxo_oauth_complete',
+      'saxo_oauth_refresh',
       'saxo_oauth_cancel',
     ]);
 
@@ -104,6 +112,7 @@ describe('Saxo tool registration', () => {
       'saxo_get_instrument_details',
       'saxo_list_exchanges',
       'saxo_get_option_chain',
+      'saxo_get_contract_option_trading_conditions',
       'saxo_list_option_expiries',
       'saxo_list_standard_option_expiries',
       'saxo_find_option_leg',
@@ -118,6 +127,10 @@ describe('Saxo tool registration', () => {
       'saxo_screen_stock_strategies',
       'saxo_plan_portfolio_strategy',
       'saxo_review_strategy_positions',
+      'saxo_account_status_report',
+      'saxo_list_strategies',
+      'saxo_get_strategy',
+      'saxo_trading_ledger_report',
       'saxo_list_accounts',
       'saxo_get_balance',
       'saxo_list_positions',
@@ -150,9 +163,12 @@ describe('Saxo tool registration', () => {
       'saxo_update_price_alert',
       'saxo_delete_price_alerts',
       'saxo_update_price_alert_user_settings',
+      'saxo_register_strategy',
+      'saxo_import_trading_history',
       'saxo_oauth_login',
       'saxo_oauth_start',
       'saxo_oauth_complete',
+      'saxo_oauth_refresh',
       'saxo_oauth_cancel',
     ];
     for (const id of writeIds) {
@@ -282,6 +298,42 @@ describe('Saxo tool registration', () => {
       status: 'ok',
     });
     expect(text).not.toContain('place order');
+  });
+
+  it('saxo_oauth_refresh refreshes and can persist to a token store', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'saxo-oauth-refresh-'));
+    const tokenStorePath = join(tempDir, 'tokens.json');
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      new Response(
+        JSON.stringify({
+          access_token: 'new-access',
+          refresh_token: 'new-refresh',
+          expires_in: 1200,
+          refresh_token_expires_in: 86400,
+        }),
+        { headers: { 'content-type': 'application/json' } },
+      ),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      appKey: 'app-key',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const registered = captureRegisteredTools(client);
+    const tool = registered.saxo_oauth_refresh;
+    if (!tool) throw new Error('saxo_oauth_refresh not registered');
+
+    const result = await tool.handler({ writeToTokenStore: true, tokenStorePath });
+    const payload = JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text) as {
+      status: string;
+      tokenStorage: string;
+      tokenStorePath: string;
+    };
+
+    expect(payload).toMatchObject({ status: 'ok', tokenStorage: 'token_store', tokenStorePath });
+    await expect(readFile(tokenStorePath, 'utf8')).resolves.toContain('new-refresh');
   });
 });
 

@@ -15,6 +15,7 @@ import { readEnv } from './env.js';
 export type FollowUpVerdict = 'hold' | 'review' | 'consider_trim' | 'consider_close' | 'roll_watch' | 'unknown';
 export type StrategyInstrumentType = 'stock' | 'option' | 'mixed';
 export type StrategyReviewDepth = 'status' | 'standard' | 'deep';
+export type ProfitOptimizationMode = 'standard' | 'convex_momentum';
 type StrategyPositionInput = NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
 
 export interface StrategyLegSnapshotInput {
@@ -86,6 +87,8 @@ export interface StrategyFollowUpInput {
   earningsHorizon?: '3month' | '6month' | '12month';
   technicalHorizon?: number;
   technicalBars?: number;
+  profitOptimizationMode?: ProfitOptimizationMode;
+  currentUnderlyingOverrides?: Record<string, number>;
 }
 
 export interface StrategyFollowUpResult {
@@ -139,9 +142,13 @@ export interface StrategyFollowUpResult {
     entryMaxProfit?: number;
     currentValue?: number;
     currentUnderlyingPrice?: number;
+    currentUnderlyingPriceSource?: 'saxo' | 'caller_override';
     unrealizedPnL?: number;
     unrealizedPnLPercentOfMaxRisk?: number;
     unrealizedPnLPercentOfMaxProfit?: number;
+    dteFractionElapsed?: number;
+    profitVelocity?: number;
+    remainingOptionalityScore?: number;
     netGreeks?: {
       delta?: number;
       gamma?: number;
@@ -161,6 +168,7 @@ export interface StrategyFollowUpResult {
       estimatedExpectedValuePercentOfMaxRisk?: number;
       notes: string[];
     };
+    profitOptimization?: ProfitOptimizationReview;
     triggeredRules: string[];
     warnings: string[];
     legs: Array<{
@@ -176,6 +184,33 @@ export interface StrategyFollowUpResult {
     }>;
   }>;
   warnings: string[];
+}
+
+export interface ProfitOptimizationReview {
+  mode: ProfitOptimizationMode;
+  action: 'hold' | 'trim' | 'close' | 'roll_up' | 'trim_and_roll' | 'raise_stop';
+  trimFraction?: number;
+  runnerFraction?: number;
+  suggestedStopRaiseLevel?: number;
+  expectedRemainingProfit?: number;
+  regretAsymmetry?: boolean;
+  orderDrafts: ProfitOptimizationOrderDraft[];
+  rationale: string[];
+}
+
+export interface ProfitOptimizationOrderDraft {
+  draftOnly: true;
+  action: 'trim' | 'close' | 'roll_up';
+  orderType: 'Limit';
+  legs: Array<{
+    Uic: number;
+    AssetType: string;
+    BuySell: 'Buy' | 'Sell';
+    Amount: number;
+    ToOpenClose: 'ToClose';
+  }>;
+  limitPrice?: number;
+  notes: string[];
 }
 
 interface InfoPrice {
@@ -284,6 +319,7 @@ export async function reviewStrategyPositions(
   const accountKey = input.accountKey ?? snapshot?.accountKey;
   const defaultRules = { ...snapshot?.defaultRules, ...input.defaultRules };
   const contextOptions = resolveReviewContextOptions(input);
+  const profitOptimizationMode = input.profitOptimizationMode ?? 'standard';
   const positions = await listPositions(client, {
     accountKey,
     clientKey: input.clientKey,
@@ -328,6 +364,8 @@ export async function reviewStrategyPositions(
       defaultRules,
       now,
       openAmountByUic,
+      profitOptimizationMode,
+      currentUnderlyingOverrides: normalizeUnderlyingOverrides(input.currentUnderlyingOverrides),
       underlyingPriceByUic,
       priceByUic,
       fallbackName: `Strategy ${index + 1}`,
@@ -555,6 +593,8 @@ function reviewOneStrategy(
     fallbackName: string;
     now: Date;
     openAmountByUic: Map<number, number>;
+    profitOptimizationMode: ProfitOptimizationMode;
+    currentUnderlyingOverrides: Map<string, number>;
     underlyingPriceByUic: Map<number, number>;
     priceByUic: Map<number, InfoPrice>;
   },
@@ -567,13 +607,30 @@ function reviewOneStrategy(
   const openLegsMatched = legs.filter(leg => leg.matched).length;
   const instrumentType = inferStrategyInstrumentType(strategy.legs);
   const currentValue = aggregateCurrentValue(legs);
-  const currentUnderlyingPrice = strategyCurrentUnderlyingPrice(strategy.legs, context.underlyingPriceByUic);
+  const underlyingOverride = currentUnderlyingOverride(strategy, context.currentUnderlyingOverrides);
+  const currentUnderlyingPrice = underlyingOverride ?? strategyCurrentUnderlyingPrice(strategy.legs, context.underlyingPriceByUic);
+  const currentUnderlyingPriceSource = underlyingOverride === undefined ? (currentUnderlyingPrice === undefined ? undefined : 'saxo') : 'caller_override';
   const unrealizedPnL = currentValue !== undefined && entryValue !== undefined
     ? currentValue - entryValue
     : undefined;
   const netGreeks = aggregateGreeks(strategy.legs, context.priceByUic, entryMaxRisk);
   const expectedValue = expectedValueEstimate(strategy, entryMaxRisk);
   const daysToEarliestExpiry = earliestDte(strategy.legs, context.now);
+  const dteFractionElapsed = dteElapsedFraction(strategy, daysToEarliestExpiry, context.now);
+  const profitVelocity = profitVelocityScore({
+    dteFractionElapsed,
+    entryMaxProfit,
+    entryMaxRisk,
+    unrealizedPnL,
+  });
+  const remainingOptionalityScore = remainingOptionalityScoreForStrategy({
+    currentValue,
+    daysToEarliestExpiry,
+    entryMaxProfit,
+    instrumentType,
+    strategy,
+    unrealizedPnL,
+  });
   const triggeredRules = [
     ...triggeredFollowUpRules({
     currentValue,
@@ -590,6 +647,22 @@ function reviewOneStrategy(
     }),
     ...triggeredContextRules(strategy, context.context),
   ];
+  const profitOptimization = buildProfitOptimizationReview(strategy, {
+    currentUnderlyingPrice,
+    currentUnderlyingPriceSource,
+    currentValue,
+    daysToEarliestExpiry,
+    dteFractionElapsed,
+    entryMaxProfit,
+    entryMaxRisk,
+    entryValue,
+    instrumentType,
+    mode: context.profitOptimizationMode,
+    profitVelocity,
+    remainingOptionalityScore,
+    triggeredRules,
+    unrealizedPnL,
+  });
   const warnings = [
     openLegsMatched < strategy.legs.length ? 'One or more expected legs were not found in open positions.' : undefined,
     currentValue === undefined ? 'Current close value could not be estimated for all legs.' : undefined,
@@ -602,7 +675,10 @@ function reviewOneStrategy(
     symbol: strategy.symbol,
     strategy: strategy.strategy,
     instrumentType,
-    verdict: verdictFromRules(triggeredRules, warnings, daysToEarliestExpiry),
+    verdict: verdictFromProfitOptimization(
+      profitOptimization,
+      verdictFromRules(triggeredRules, warnings, daysToEarliestExpiry),
+    ),
     daysToEarliestExpiry,
     openLegsMatched,
     expectedLegs: strategy.legs.length,
@@ -611,15 +687,20 @@ function reviewOneStrategy(
     entryMaxProfit,
     currentValue: roundMoney(currentValue),
     currentUnderlyingPrice: roundMoney(currentUnderlyingPrice),
+    currentUnderlyingPriceSource,
     unrealizedPnL: roundMoney(unrealizedPnL),
     unrealizedPnLPercentOfMaxRisk: percent(unrealizedPnL, entryMaxRisk),
     unrealizedPnLPercentOfMaxProfit: percent(unrealizedPnL, entryMaxProfit),
+    dteFractionElapsed,
+    profitVelocity,
+    remainingOptionalityScore,
     netGreeks,
     technicalContext: context.context?.technicalContext,
     newsContext: context.context?.newsContext,
     fundamentalsContext: context.context?.fundamentalsContext,
     liquidityContext: context.context?.liquidityContext,
     expectedValue,
+    profitOptimization,
     triggeredRules,
     warnings,
     legs,
@@ -807,6 +888,264 @@ function verdictFromRules(triggeredRules: string[], warnings: string[], dte: num
   if (triggeredRules.some(rule => rule.startsWith('Roll watch')) || (dte !== undefined && dte <= 14)) return 'roll_watch';
   if (triggeredRules.length) return 'review';
   return 'hold';
+}
+
+function verdictFromProfitOptimization(
+  optimization: ProfitOptimizationReview | undefined,
+  fallback: FollowUpVerdict,
+): FollowUpVerdict {
+  if (
+    !optimization ||
+    optimization.mode !== 'convex_momentum' ||
+    optimization.action === 'hold' ||
+    optimization.action === 'raise_stop'
+  ) {
+    return fallback;
+  }
+  if (optimization.action === 'close') {
+    return 'consider_close';
+  }
+  if (optimization.action === 'trim' || optimization.action === 'trim_and_roll') {
+    return 'consider_trim';
+  }
+  if (optimization.action === 'roll_up') {
+    return 'roll_watch';
+  }
+  return fallback;
+}
+
+function buildProfitOptimizationReview(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  input: {
+    currentUnderlyingPrice?: number;
+    currentUnderlyingPriceSource?: 'saxo' | 'caller_override';
+    currentValue?: number;
+    daysToEarliestExpiry?: number;
+    dteFractionElapsed?: number;
+    entryMaxProfit?: number;
+    entryMaxRisk?: number;
+    entryValue?: number;
+    instrumentType: StrategyInstrumentType;
+    mode: ProfitOptimizationMode;
+    profitVelocity?: number;
+    remainingOptionalityScore?: number;
+    triggeredRules: string[];
+    unrealizedPnL?: number;
+  },
+): ProfitOptimizationReview | undefined {
+  if (input.instrumentType === 'stock' || input.currentValue === undefined) {
+    return undefined;
+  }
+  const rationale: string[] = [];
+  const profitReached = input.triggeredRules.some(rule => rule.startsWith('Profit target'));
+  const underlyingMovePercent = input.currentUnderlyingPrice !== undefined && strategy.entryUnderlyingPrice
+    ? (input.currentUnderlyingPrice - strategy.entryUnderlyingPrice) / strategy.entryUnderlyingPrice * 100
+    : undefined;
+  const fastWinner =
+    (input.profitVelocity ?? 0) >= 1 ||
+    (input.mode === 'convex_momentum' && (underlyingMovePercent ?? 0) >= 8 && (input.daysToEarliestExpiry ?? 0) >= 30);
+  const substantialDteLeft = input.dteFractionElapsed === undefined
+    ? (input.daysToEarliestExpiry ?? 0) >= 45
+    : input.dteFractionElapsed < 0.75;
+  const remainingOptionality = (input.remainingOptionalityScore ?? 0) >= 45;
+  let action: ProfitOptimizationReview['action'] = 'hold';
+  if (profitReached && substantialDteLeft) {
+    action = input.mode === 'convex_momentum' && remainingOptionality ? 'trim_and_roll' : 'trim';
+    rationale.push('Profit target reached while substantial DTE remains; prefer partial de-risking over a full close.');
+  } else if (profitReached) {
+    action = 'close';
+    rationale.push('Profit target reached late enough in the lifecycle that closing the position is acceptable.');
+  } else if (fastWinner && substantialDteLeft) {
+    action = 'trim';
+    rationale.push('Fast winner detected before most DTE has elapsed; trim enough to reduce giveback risk and keep a runner.');
+  } else if (input.mode === 'convex_momentum' && input.unrealizedPnL !== undefined && input.unrealizedPnL > 0) {
+    action = 'raise_stop';
+    rationale.push('Position is profitable in convex momentum mode; consider raising the stop rather than closing early.');
+  }
+  if (input.currentUnderlyingPriceSource === 'caller_override') {
+    rationale.push('Underlying price uses caller_override, useful for postmarket moves not reflected in Saxo quotes.');
+  }
+  if (underlyingMovePercent !== undefined) {
+    rationale.push(`Underlying move since entry is ${roundMoney(underlyingMovePercent)}%.`);
+  }
+  const trimFraction = action === 'trim' || action === 'trim_and_roll'
+    ? trimFractionForElapsed(input.dteFractionElapsed)
+    : action === 'close'
+      ? 1
+      : undefined;
+  const runnerFraction = trimFraction === undefined ? undefined : roundMoney(Math.max(0, 1 - trimFraction));
+  const stopRaiseLevel = suggestedStopRaiseLevel(strategy, input.currentUnderlyingPrice, input.unrealizedPnL, input.dteFractionElapsed);
+  const expectedRemainingProfit = input.entryMaxProfit !== undefined && input.unrealizedPnL !== undefined
+    ? roundMoney(Math.max(0, input.entryMaxProfit - input.unrealizedPnL))
+    : undefined;
+  const regretAsymmetry = Boolean(
+    input.mode === 'convex_momentum' &&
+    substantialDteLeft &&
+    remainingOptionality &&
+    input.unrealizedPnL !== undefined &&
+    input.unrealizedPnL > 0,
+  );
+  if (!rationale.length) {
+    rationale.push('No profit-optimization trigger fired; continue monitoring thesis, liquidity, and theta.');
+  }
+  return {
+    mode: input.mode,
+    action,
+    trimFraction,
+    runnerFraction,
+    suggestedStopRaiseLevel: stopRaiseLevel,
+    expectedRemainingProfit,
+    regretAsymmetry,
+    orderDrafts: buildProfitOptimizationOrderDrafts(strategy, {
+      action,
+      currentValue: input.currentValue,
+      trimFraction,
+    }),
+    rationale,
+  };
+}
+
+function trimFractionForElapsed(dteFractionElapsed: number | undefined): number {
+  if (dteFractionElapsed === undefined || dteFractionElapsed < 0.25) return 1 / 3;
+  if (dteFractionElapsed < 0.5) return 0.5;
+  if (dteFractionElapsed < 0.75) return 2 / 3;
+  return 1;
+}
+
+function buildProfitOptimizationOrderDrafts(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  input: {
+    action: ProfitOptimizationReview['action'];
+    currentValue?: number;
+    trimFraction?: number;
+  },
+): ProfitOptimizationOrderDraft[] {
+  if (input.trimFraction === undefined || !['trim', 'close', 'trim_and_roll'].includes(input.action)) {
+    return [];
+  }
+  const legs = strategy.legs
+    .map(leg => {
+      const amount = Math.floor(Math.abs(leg.amount) * input.trimFraction!);
+      return amount > 0
+        ? {
+          Uic: leg.uic,
+          AssetType: inferLegAssetType(leg),
+          BuySell: oppositeSide(leg.buySell),
+          Amount: amount,
+          ToOpenClose: 'ToClose' as const,
+        }
+        : undefined;
+    })
+    .filter((leg): leg is ProfitOptimizationOrderDraft['legs'][number] => leg !== undefined);
+  if (!legs.length) {
+    return [];
+  }
+  return [{
+    draftOnly: true,
+    action: input.action === 'close' ? 'close' : 'trim',
+    orderType: 'Limit',
+    legs,
+    limitPrice: roundMoney(input.currentValue === undefined ? undefined : input.currentValue * input.trimFraction),
+    notes: [
+      'Draft only; verify live quote, leg amounts, and Saxo order semantics before using an order tool.',
+      input.action === 'trim_and_roll'
+        ? 'Roll-up candidate: close the trim quantity first, then rerun the screener for a fresh runner entry.'
+        : 'Partial close draft sized from the DTE-aware trim fraction.',
+    ],
+  }];
+}
+
+function oppositeSide(side: 'Buy' | 'Sell'): 'Buy' | 'Sell' {
+  return side === 'Buy' ? 'Sell' : 'Buy';
+}
+
+function suggestedStopRaiseLevel(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  currentUnderlyingPrice: number | undefined,
+  unrealizedPnL: number | undefined,
+  dteFractionElapsed: number | undefined,
+): number | undefined {
+  if (currentUnderlyingPrice === undefined || unrealizedPnL === undefined || unrealizedPnL <= 0) {
+    return undefined;
+  }
+  const entry = strategy.entryUnderlyingPrice;
+  if (entry === undefined) {
+    return undefined;
+  }
+  const lockPercent = dteFractionElapsed === undefined || dteFractionElapsed < 0.25
+    ? 0
+    : dteFractionElapsed < 0.5
+      ? 0.5
+      : 0.65;
+  return roundMoney(entry + Math.max(0, currentUnderlyingPrice - entry) * lockPercent);
+}
+
+function dteElapsedFraction(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  daysToEarliestExpiry: number | undefined,
+  now: Date,
+): number | undefined {
+  if (!strategy.openedAt || daysToEarliestExpiry === undefined) {
+    return undefined;
+  }
+  const openedAt = Date.parse(strategy.openedAt);
+  if (!Number.isFinite(openedAt)) {
+    return undefined;
+  }
+  const elapsedDays = Math.max(0, (now.getTime() - openedAt) / 86_400_000);
+  const originalDte = elapsedDays + daysToEarliestExpiry;
+  if (originalDte <= 0) {
+    return undefined;
+  }
+  return roundMoney(Math.min(1, Math.max(0, elapsedDays / originalDte)));
+}
+
+function profitVelocityScore(input: {
+  dteFractionElapsed?: number;
+  entryMaxProfit?: number;
+  entryMaxRisk?: number;
+  unrealizedPnL?: number;
+}): number | undefined {
+  if (input.unrealizedPnL === undefined || input.dteFractionElapsed === undefined || input.dteFractionElapsed <= 0) {
+    return undefined;
+  }
+  const base = input.entryMaxProfit ?? input.entryMaxRisk;
+  if (base === undefined || base <= 0) {
+    return undefined;
+  }
+  return roundMoney(input.unrealizedPnL / base / input.dteFractionElapsed);
+}
+
+function remainingOptionalityScoreForStrategy(input: {
+  currentValue?: number;
+  daysToEarliestExpiry?: number;
+  entryMaxProfit?: number;
+  instrumentType: StrategyInstrumentType;
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number];
+  unrealizedPnL?: number;
+}): number | undefined {
+  if (input.instrumentType === 'stock') {
+    return undefined;
+  }
+  if ((input.strategy.strategy ?? '').toLowerCase().includes('long_call')) {
+    return clampPercent((input.daysToEarliestExpiry ?? 0) / 180 * 70 + (input.unrealizedPnL && input.unrealizedPnL > 0 ? 30 : 10));
+  }
+  if (input.entryMaxProfit === undefined || input.unrealizedPnL === undefined) {
+    return clampPercent((input.daysToEarliestExpiry ?? 0) / 365 * 60);
+  }
+  const remainingProfit = Math.max(0, input.entryMaxProfit - input.unrealizedPnL);
+  return clampPercent(
+    remainingProfit / input.entryMaxProfit * 40 +
+    Math.min(45, (input.daysToEarliestExpiry ?? 0) / 365 * 80) +
+    (input.unrealizedPnL > 0 ? 15 : 0),
+  );
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return roundMoney(Math.max(0, Math.min(100, value))) ?? 0;
 }
 
 function aggregateCurrentValue(legs: StrategyFollowUpResult['reviews'][number]['legs']): number | undefined {
@@ -1250,6 +1589,24 @@ function strategyCurrentUnderlyingPrice(
     }
   }
   return undefined;
+}
+
+function normalizeUnderlyingOverrides(overrides: Record<string, number> | undefined): Map<string, number> {
+  const output = new Map<string, number>();
+  for (const [symbol, value] of Object.entries(overrides ?? {})) {
+    if (Number.isFinite(value) && value > 0) {
+      output.set(reviewDisplaySymbol(symbol), value);
+    }
+  }
+  return output;
+}
+
+function currentUnderlyingOverride(
+  strategy: NonNullable<StrategyFollowUpInput['strategyPositions']>[number],
+  overrides: Map<string, number>,
+): number | undefined {
+  const symbol = reviewSymbol(strategy);
+  return symbol ? overrides.get(symbol) : undefined;
 }
 
 function expectedValueEstimate(

@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { formatUnknownError, redactSecrets, SaxoHttpError } from '../src/errors.js';
 import { SaxoClient } from '../src/saxo/client.js';
 
@@ -10,8 +13,12 @@ const ENV_KEYS = [
   'SAXO_APP_SECRET',
   'SAXO_TIMEOUT_MS',
   'SAXO_BASE_URL',
+  'SAXO_TOKEN_EXPIRES_AT',
+  'SAXO_REFRESH_TOKEN_EXPIRES_AT',
+  'SAXO_TOKEN_STORE_PATH',
 ];
 const savedEnv: Record<string, string | undefined> = {};
+let tempDir: string | undefined;
 
 describe('SaxoClient', () => {
   beforeEach(() => {
@@ -21,13 +28,17 @@ describe('SaxoClient', () => {
     }
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const key of ENV_KEYS) {
       if (savedEnv[key] === undefined) {
         delete process.env[key];
       } else {
         process.env[key] = savedEnv[key];
       }
+    }
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
     }
   });
 
@@ -275,6 +286,67 @@ describe('SaxoClient', () => {
     const url = String(fetchMock.mock.calls[0]?.[0]);
     expect(url).toBe('https://gateway.saxobank.com/sim/openapi/trade/v2/orders/multileg/88608648?AccountKey=AK');
     expect(fetchMock.mock.calls[0]?.[1]?.method).toBe('DELETE');
+  });
+
+  it('invokes the refresh callback with rotated tokens and refresh expiry', async () => {
+    const refreshed = vi.fn();
+    const fetchMock = vi.fn<typeof fetch>(async (url, _init) => {
+      if (String(url).includes('/token')) {
+        return jsonResponse({
+          access_token: 'new-token',
+          refresh_token: 'new-refresh',
+          expires_in: 1200,
+          refresh_token_expires_in: 86400,
+        });
+      }
+      return jsonResponse({ ErrorCode: 'Unauthorized' }, 401);
+    });
+
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'expired-token',
+      refreshToken: 'refresh-token',
+      appKey: 'app-key',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      onTokensRefreshed: refreshed,
+    });
+
+    await expect(client.get('/port/v1/orders/me')).rejects.toBeInstanceOf(SaxoHttpError);
+    expect(refreshed).toHaveBeenCalledOnce();
+    const [tokens, environment] = refreshed.mock.calls[0] ?? [];
+    expect(environment).toBe('sim');
+    expect(tokens).toMatchObject({ accessToken: 'new-token', refreshToken: 'new-refresh' });
+    expect(tokens.refreshTokenExpiresAt).toBeGreaterThan(Date.now());
+  });
+
+  it('loads tokens from SAXO_TOKEN_STORE_PATH when explicit tokens are absent', async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'saxo-token-store-'));
+    const tokenStorePath = join(tempDir, 'tokens.json');
+    await writeFile(
+      tokenStorePath,
+      JSON.stringify({
+        environment: 'sim',
+        accessToken: 'stored-access',
+        refreshToken: 'stored-refresh',
+        tokenExpiresAt: '2030-01-01T00:00:00.000Z',
+        refreshTokenExpiresAt: '2030-02-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+      'utf8',
+    );
+    process.env.SAXO_TOKEN_STORE_PATH = tokenStorePath;
+
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ ok: true }));
+    const client = new SaxoClient({
+      environment: 'sim',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    await client.get('/root/v1/sessions/me');
+    expect(fetchMock.mock.calls[0]?.[1]?.headers).toMatchObject({
+      Authorization: 'Bearer stored-access',
+    });
+    expect(client.getRefreshTokenExpiresAt()).toBe(Date.parse('2030-02-01T00:00:00.000Z'));
   });
 
   it('creates price alerts against /vas/v1/pricealerts/definitions', async () => {

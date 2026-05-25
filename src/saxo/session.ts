@@ -62,6 +62,14 @@ export interface SaxoDiagnostics {
     expiresInSeconds?: number;
     issuer?: string;
     refreshAvailable: boolean;
+    refreshTokenExpiresAt?: string;
+    refreshTokenExpiresInSeconds?: number;
+    persistence: {
+      tokenStoreConfigured: boolean;
+      tokenStorePath?: string;
+      persistTokensOnRefresh: boolean;
+      tokenEnvFilePath?: string;
+    };
   };
   warnings: string[];
 }
@@ -84,6 +92,11 @@ export async function getDiagnostics(client: SaxoClient): Promise<SaxoDiagnostic
   }
 
   const tokenInfo = inspectAccessToken(client.getAccessToken());
+  const refreshTokenExpiresAt = client.getRefreshTokenExpiresAt();
+  const refreshTokenExpiresInSeconds = secondsUntil(refreshTokenExpiresAt);
+  const tokenStorePath = readEnv('SAXO_TOKEN_STORE_PATH');
+  const persistTokensOnRefresh = readBoolEnv('SAXO_PERSIST_TOKENS_ON_REFRESH', false);
+  const tokenEnvFilePath = readEnv('SAXO_TOKEN_ENV_FILE_PATH');
 
   if (session?.MarketDataViaOpenApiTermsAccepted === false) {
     warnings.push(
@@ -100,6 +113,22 @@ export async function getDiagnostics(client: SaxoClient): Promise<SaxoDiagnostic
   if (tokenInfo.expiresInSeconds !== undefined && tokenInfo.expiresInSeconds < 600) {
     warnings.push(
       `Access token expires in ${tokenInfo.expiresInSeconds}s. Refresh soon or generate a new token.`,
+    );
+  }
+
+  if (!client.hasRefreshCredentials()) {
+    warnings.push('No Saxo refresh credentials are configured; the access token cannot be extended automatically.');
+  }
+
+  if (refreshTokenExpiresInSeconds !== undefined && refreshTokenExpiresInSeconds < 7 * 24 * 60 * 60) {
+    warnings.push(
+      `Refresh token expires in ${refreshTokenExpiresInSeconds}s. Re-run Saxo OAuth before it expires.`,
+    );
+  }
+
+  if (client.hasRefreshCredentials() && !tokenStorePath && !persistTokensOnRefresh) {
+    warnings.push(
+      'Token refresh is available, but refreshed tokens are not persisted. Configure SAXO_TOKEN_STORE_PATH or set SAXO_PERSIST_TOKENS_ON_REFRESH=true to survive MCP restarts.',
     );
   }
 
@@ -135,9 +164,24 @@ export async function getDiagnostics(client: SaxoClient): Promise<SaxoDiagnostic
       expiresInSeconds: tokenInfo.expiresInSeconds,
       issuer: tokenInfo.issuer,
       refreshAvailable: client.hasRefreshCredentials(),
+      refreshTokenExpiresAt: refreshTokenExpiresAt ? new Date(refreshTokenExpiresAt).toISOString() : undefined,
+      refreshTokenExpiresInSeconds,
+      persistence: {
+        tokenStoreConfigured: Boolean(tokenStorePath),
+        tokenStorePath,
+        persistTokensOnRefresh,
+        tokenEnvFilePath,
+      },
     },
     warnings,
   };
+}
+
+function secondsUntil(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor((value - Date.now()) / 1000));
 }
 
 interface TokenInfo {
