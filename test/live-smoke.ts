@@ -57,21 +57,20 @@ async function main(): Promise<void> {
   }
   console.error('   ok:', JSON.stringify(infoprice.Quote).slice(0, 160));
 
-  console.error('-> saxo_get_market_depth (confirm MarketDepth field shape)');
-  const depth = await getMarketDepth(client, {
-    uic: first.Identifier,
-    assetType: first.AssetType,
-  });
+  // FxSpot (EURUSD Uic 21) carries Level-2 depth on the SIM feed; most stocks
+  // do not, so demonstrate market depth against FX.
+  console.error('-> saxo_get_market_depth (EURUSD FxSpot, Uic 21)');
+  const depth = await getMarketDepth(client, { uic: 21, assetType: 'FxSpot' });
   if (depth._warning) {
     console.error(`   note: ${depth._warning}`);
   }
   console.error('   MarketDepth keys:', Object.keys(depth.MarketDepth ?? {}).join(', ') || '(none)');
-  console.error('   ok:', JSON.stringify(depth.MarketDepth).slice(0, 200));
+  console.error('   ok:', JSON.stringify(depth.MarketDepth ?? null).slice(0, 240));
 
-  console.error('-> saxo_stream_prices (maxSeconds=5)');
+  console.error('-> saxo_stream_prices (EURUSD FxSpot, maxSeconds=5)');
   const stream = await streamPrices(client, {
-    uic: first.Identifier,
-    assetType: first.AssetType,
+    uic: 21,
+    assetType: 'FxSpot',
     maxSeconds: 5,
   });
   if (stream._warning) {

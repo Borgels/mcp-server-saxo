@@ -24,8 +24,9 @@ export interface SaxoQuote {
 
 /**
  * Level-2 order book depth. Saxo returns parallel arrays where index 0 is the
- * best (inside) level. All fields are optional and passed through verbatim so
- * an unexpected shape never throws.
+ * best (inside) level. Field names confirmed against a live SIM FxSpot
+ * response. Unknown/extra fields pass through via the index signature so the
+ * tool never drops data or throws on shape changes.
  */
 export interface MarketDepth {
   Bid?: number[];
@@ -35,7 +36,9 @@ export interface MarketDepth {
   BidOrders?: number[];
   AskOrders?: number[];
   NoOfBids?: number;
-  NoOfAsks?: number;
+  NoOfOffers?: number;
+  Level2PriceFeed?: boolean;
+  UsingOrders?: boolean;
   [key: string]: unknown;
 }
 
