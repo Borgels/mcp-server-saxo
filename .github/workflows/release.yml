@@ -155,7 +155,7 @@ jobs:
           npx -y -p @anthropic-ai/mcpb@^2.1.2 mcpb pack . "mcp-server-saxo-${GITHUB_REF_NAME}.mcpb"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
