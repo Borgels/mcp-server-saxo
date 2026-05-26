@@ -463,6 +463,8 @@ rules.
 | `saxo_find_option_leg` | (composes search + chain) | Convenience helper: given symbol + expiry + strike + Call/Put, returns the leg Uic in one call instead of 4. Picks multi-leg-capable root when ambiguous. |
 | `saxo_get_infoprice` | `GET /trade/v1/infoprices` | Snapshot bid/ask/last for one instrument. Adds `_warning` if `PriceType=NoAccess`. |
 | `saxo_get_infoprices_list` | `GET /trade/v1/infoprices/list` | Snapshot prices for multiple Uics. |
+| `saxo_get_market_depth` | `GET /trade/v1/infoprices` (`FieldGroups=MarketDepth`) | Level-2 / order book snapshot: bid/ask price levels + sizes for one instrument. Adds `_warning` if `PriceType=NoAccess`. |
+| `saxo_stream_prices` | `POST /trade/v1/prices/subscriptions` + streaming WebSocket | Bounded real-time price sample: opens a short-lived subscription, collects ticks for a window (default 5s / 50 ticks, max 30s / 500), tears it down, and returns the tape + final merged quote. |
 | `saxo_get_chart` | `GET /chart/v3/charts` | Historical OHLC bars (horizon in minutes). |
 | `saxo_screen_market` | Saxo instruments + info prices | User-friendly top gainers/losers and pre-market screeners. |
 | `saxo_compute_spread_quote` | (uses infoprices) | Fetch bid/ask per leg and compute worst-case, mid, best-case net debit for a multi-leg spread. |

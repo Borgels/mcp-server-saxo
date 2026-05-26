@@ -2,6 +2,7 @@ export type SaxoEnvironment = 'sim' | 'live';
 
 export interface SaxoEnvironmentEndpoints {
   apiBase: string;
+  streamingBase: string;
   authorize: string;
   token: string;
 }
@@ -9,11 +10,13 @@ export interface SaxoEnvironmentEndpoints {
 const ENDPOINTS: Record<SaxoEnvironment, SaxoEnvironmentEndpoints> = {
   sim: {
     apiBase: 'https://gateway.saxobank.com/sim/openapi',
+    streamingBase: 'https://streaming.saxobank.com/sim/openapi',
     authorize: 'https://sim.logonvalidation.net/authorize',
     token: 'https://sim.logonvalidation.net/token',
   },
   live: {
     apiBase: 'https://gateway.saxobank.com/openapi',
+    streamingBase: 'https://streaming.saxobank.com/openapi',
     authorize: 'https://live.logonvalidation.net/authorize',
     token: 'https://live.logonvalidation.net/token',
   },

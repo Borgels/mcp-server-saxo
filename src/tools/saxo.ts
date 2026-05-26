@@ -15,7 +15,9 @@ import {
   getChart,
   getInfoPrice,
   getInfoPricesList,
+  getMarketDepth,
 } from '../saxo/prices.js';
+import { streamPrices } from '../saxo/streaming.js';
 import { planOptionStrategy } from '../saxo/options.js';
 import { screenOptionStrategies } from '../saxo/option-strategy-screener.js';
 import { planPortfolioStrategy } from '../saxo/portfolio-strategy.js';
@@ -806,6 +808,48 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async input =>
       runAuditedTool(client, 'saxo_get_infoprices_list', input, async () =>
         jsonToolResult(await getInfoPricesList(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_get_market_depth',
+    {
+      title: 'Get Market Depth (Level 2 / Order Book)',
+      description:
+        'Fetch a Level-2 order book snapshot (bid/ask price levels and sizes) plus the inside quote for one instrument, via the infoprices MarketDepth field group. Snapshot only — no streaming. Depth requires the per-exchange market-data subscription; otherwise the response carries a NoAccess _warning and depth arrays may be empty.',
+      inputSchema: {
+        uic: z.number().int().nonnegative(),
+        assetType: z.string().trim().min(1),
+        accountKey: z.string().trim().min(1).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_get_market_depth', input, async () =>
+        jsonToolResult(await getMarketDepth(client, input)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_stream_prices',
+    {
+      title: 'Stream Prices (Bounded Real-Time Sample)',
+      description:
+        'Open a short-lived real-time price subscription over the Saxo streaming WebSocket, collect tick updates for a bounded window, then tear the subscription down. Returns the captured tape (ticks with timestamps) plus the final merged quote. The subscription is always cleaned up. Works on SIM and LIVE; surfaces a NoAccess _warning when live market-data terms are not accepted.',
+      inputSchema: {
+        uic: z.number().int().nonnegative(),
+        assetType: z.string().trim().min(1),
+        accountKey: z.string().trim().min(1).optional(),
+        maxSeconds: z.number().int().min(1).max(30).optional(),
+        maxTicks: z.number().int().min(1).max(500).optional(),
+        refreshRate: z.number().int().min(100).max(60_000).optional(),
+        fieldGroups: z.array(z.string().trim().min(1)).optional(),
+      },
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_stream_prices', input, async () =>
+        jsonToolResult(await streamPrices(client, input)),
       ),
   );
 

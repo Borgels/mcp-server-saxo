@@ -1,7 +1,8 @@
 import { SaxoClient } from '../src/saxo/client.js';
 import { searchInstruments } from '../src/saxo/reference.js';
 import { getDiagnostics, getSessionMe } from '../src/saxo/session.js';
-import { getInfoPrice } from '../src/saxo/prices.js';
+import { getInfoPrice, getMarketDepth } from '../src/saxo/prices.js';
+import { streamPrices } from '../src/saxo/streaming.js';
 
 async function main(): Promise<void> {
   const accessToken = process.env.SAXO_ACCESS_TOKEN;
@@ -55,6 +56,32 @@ async function main(): Promise<void> {
     console.error(`   note: ${infoprice._warning}`);
   }
   console.error('   ok:', JSON.stringify(infoprice.Quote).slice(0, 160));
+
+  console.error('-> saxo_get_market_depth (confirm MarketDepth field shape)');
+  const depth = await getMarketDepth(client, {
+    uic: first.Identifier,
+    assetType: first.AssetType,
+  });
+  if (depth._warning) {
+    console.error(`   note: ${depth._warning}`);
+  }
+  console.error('   MarketDepth keys:', Object.keys(depth.MarketDepth ?? {}).join(', ') || '(none)');
+  console.error('   ok:', JSON.stringify(depth.MarketDepth).slice(0, 200));
+
+  console.error('-> saxo_stream_prices (maxSeconds=5)');
+  const stream = await streamPrices(client, {
+    uic: first.Identifier,
+    assetType: first.AssetType,
+    maxSeconds: 5,
+  });
+  if (stream._warning) {
+    console.error(`   note: ${stream._warning}`);
+  }
+  console.error(
+    `   ticks=${stream.ticks.length} durationMs=${stream.durationMs} ` +
+      `control=[${stream.controlMessages.join(',')}]`,
+  );
+  console.error('   finalQuote:', JSON.stringify(stream.finalQuote).slice(0, 160));
 
   console.error('\nSmoke test passed.');
 }

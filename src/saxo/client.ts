@@ -29,6 +29,7 @@ export class SaxoClient {
   private readonly appKey?: string;
   private readonly appSecret?: string;
   readonly baseUrl: string;
+  private readonly streamingBase: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
   private static readonly REFRESH_LEAD_MS = 60_000;
@@ -52,6 +53,10 @@ export class SaxoClient {
       options.baseUrl ?? readEnv('SAXO_BASE_URL') ?? endpoints.apiBase,
     );
     assertSafeBaseUrl(this.baseUrl);
+
+    // Streaming uses a dedicated host and is derived from the environment, not
+    // from baseUrl (which may be overridden to a local mock for tests).
+    this.streamingBase = trimTrailingSlash(endpoints.streamingBase);
 
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? readNumberEnv('SAXO_TIMEOUT_MS', 30_000);
@@ -82,6 +87,11 @@ export class SaxoClient {
 
   getAccessToken(): string | undefined {
     return this.accessToken;
+  }
+
+  /** Base URL of the streaming host for the current environment (no trailing slash). */
+  getStreamingBase(): string {
+    return this.streamingBase;
   }
 
   getAccessTokenExpiresAt(): number | undefined {

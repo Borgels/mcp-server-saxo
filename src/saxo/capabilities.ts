@@ -204,6 +204,34 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['price', 'list', 'batch', 'snapshot'],
   },
   {
+    id: 'saxo_get_market_depth',
+    title: 'Get Market Depth (Level 2 / Order Book)',
+    description:
+      'Fetch a Level-2 order book snapshot (bid/ask price levels and sizes) plus the inside quote for one instrument. Requires the per-exchange market-data subscription.',
+    risk: 'read',
+    examples: [{ uic: 211, assetType: 'Stock' }],
+    identifierFormats: ['Uic + AssetType'],
+    safetyNotes: [
+      'Read-only snapshot.',
+      'Depth requires live market-data terms; otherwise a NoAccess _warning is returned and arrays may be empty.',
+    ],
+    keywords: ['market depth', 'level 2', 'order book', 'dom', 'depth', 'daytrading', 'bid', 'ask'],
+  },
+  {
+    id: 'saxo_stream_prices',
+    title: 'Stream Prices (Bounded Real-Time Sample)',
+    description:
+      'Open a short-lived real-time price subscription over the streaming WebSocket, collect ticks for a bounded window (seconds/ticks), then tear it down. Returns the captured tape plus the final merged quote.',
+    risk: 'read',
+    examples: [{ uic: 211, assetType: 'Stock', maxSeconds: 5, maxTicks: 50 }],
+    identifierFormats: ['Uic + AssetType'],
+    safetyNotes: [
+      'Read-only; the subscription is always cleaned up.',
+      'Bounded window (max 30s / 500 ticks). Surfaces a NoAccess _warning when live market-data terms are not accepted.',
+    ],
+    keywords: ['stream', 'streaming', 'realtime', 'real-time', 'ticks', 'live', 'websocket', 'quote', 'daytrading'],
+  },
+  {
     id: 'saxo_get_chart',
     title: 'Get Chart (Historical OHLC)',
     description: 'Fetch historical OHLC bars for an instrument and horizon (minutes).',

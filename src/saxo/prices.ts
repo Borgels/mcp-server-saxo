@@ -22,10 +22,28 @@ export interface SaxoQuote {
   [key: string]: unknown;
 }
 
+/**
+ * Level-2 order book depth. Saxo returns parallel arrays where index 0 is the
+ * best (inside) level. All fields are optional and passed through verbatim so
+ * an unexpected shape never throws.
+ */
+export interface MarketDepth {
+  Bid?: number[];
+  Ask?: number[];
+  BidSize?: number[];
+  AskSize?: number[];
+  BidOrders?: number[];
+  AskOrders?: number[];
+  NoOfBids?: number;
+  NoOfAsks?: number;
+  [key: string]: unknown;
+}
+
 export interface InfoPriceResponse {
   Uic?: number;
   AssetType?: string;
   Quote?: SaxoQuote;
+  MarketDepth?: MarketDepth;
   PriceInfo?: Record<string, unknown>;
   PriceInfoDetails?: Record<string, unknown>;
   DisplayAndFormat?: Record<string, unknown>;
@@ -33,8 +51,13 @@ export interface InfoPriceResponse {
   [key: string]: unknown;
 }
 
-const NO_ACCESS_WARNING =
+export const NO_ACCESS_WARNING =
   'PriceType*=NoAccess. Live quotes via OpenAPI require the per-exchange market-data terms (separate from the 24h token consent). Accept them in the Saxo platform under Settings → Live Data Subscriptions or developer.saxo.';
+
+/** True when a quote indicates the caller lacks live market-data access. */
+export function quoteHasNoAccess(quote: SaxoQuote | undefined): boolean {
+  return Boolean(quote && (quote.PriceTypeAsk === 'NoAccess' || quote.PriceTypeBid === 'NoAccess'));
+}
 
 export async function getInfoPrice(client: SaxoClient, input: InfoPriceInput): Promise<InfoPriceResponse> {
   const response = await client.get<InfoPriceResponse>('/trade/v1/infoprices', {
@@ -43,6 +66,31 @@ export async function getInfoPrice(client: SaxoClient, input: InfoPriceInput): P
     AccountKey: input.accountKey,
     Amount: input.amount,
     FieldGroups: input.fieldGroups?.join(','),
+  });
+  return annotateInfoPrice(response);
+}
+
+export interface MarketDepthInput {
+  uic: number;
+  assetType: string;
+  accountKey?: string;
+}
+
+/**
+ * Snapshot of the Level-2 order book (bid/ask price levels and sizes) plus the
+ * inside Quote, via the infoprices MarketDepth field group. Requires the
+ * per-exchange market-data subscription; otherwise PriceType*=NoAccess sets
+ * the _warning and depth arrays may be empty.
+ */
+export async function getMarketDepth(
+  client: SaxoClient,
+  input: MarketDepthInput,
+): Promise<InfoPriceResponse> {
+  const response = await client.get<InfoPriceResponse>('/trade/v1/infoprices', {
+    Uic: input.uic,
+    AssetType: input.assetType,
+    AccountKey: input.accountKey,
+    FieldGroups: 'Quote,MarketDepth,PriceInfoDetails,DisplayAndFormat',
   });
   return annotateInfoPrice(response);
 }
@@ -80,8 +128,7 @@ export async function getInfoPricesList(
 }
 
 function annotateInfoPrice(response: InfoPriceResponse): InfoPriceResponse {
-  const quote = response.Quote;
-  if (quote && (quote.PriceTypeAsk === 'NoAccess' || quote.PriceTypeBid === 'NoAccess')) {
+  if (quoteHasNoAccess(response.Quote)) {
     return { ...response, _warning: NO_ACCESS_WARNING };
   }
   return response;
