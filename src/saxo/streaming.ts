@@ -47,6 +47,8 @@ export interface StreamPricesResult {
   contextId: string;
   referenceId: string;
   durationMs: number;
+  /** Whether the streaming WebSocket actually connected. */
+  connected: boolean;
   ticks: StreamTick[];
   finalQuote?: SaxoQuote;
   controlMessages: string[];
@@ -177,12 +179,14 @@ export async function streamPrices(
     throw new Error('Global WebSocket is unavailable; Node >=20.11 is required for streaming.');
   }
 
-  const contextId = `mcp_saxo_stream_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const referenceId = `px_${input.uic}`;
+  // Saxo restricts ContextId to a-z, A-Z, 0-9 and '-' (no underscores).
+  const contextId = `mcp-saxo-stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const referenceId = `px-${input.uic}`;
   const ticks: StreamTick[] = [];
   const controlMessages: string[] = [];
+  const warnings: string[] = [];
   let merged: SaxoQuote = {};
-  let warning: string | undefined;
+  let connected = false;
   const start = Date.now();
   let created = false;
 
@@ -209,7 +213,7 @@ export async function streamPrices(
       merged = { ...snapshotQuote };
     }
     if (quoteHasNoAccess(snapshotQuote)) {
-      warning = NO_ACCESS_WARNING;
+      warnings.push(NO_ACCESS_WARNING);
     }
 
     await new Promise<void>(resolve => {
@@ -226,6 +230,12 @@ export async function streamPrices(
         if (timer) {
           clearTimeout(timer);
         }
+        // Detach handlers so late events cannot mutate the result after we
+        // have resolved and moved on to teardown.
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
         try {
           ws.close();
         } catch {
@@ -236,7 +246,15 @@ export async function streamPrices(
 
       timer = setTimeout(settle, maxSeconds * 1000);
 
+      ws.onopen = () => {
+        connected = true;
+      };
+
       ws.onmessage = (event: { data: unknown }) => {
+        if (settled) {
+          return;
+        }
+        connected = true;
         if (!(event.data instanceof ArrayBuffer)) {
           return;
         }
@@ -280,15 +298,26 @@ export async function streamPrices(
     }
   }
 
+  if (!connected) {
+    warnings.push(
+      'Streaming WebSocket did not connect (the streaming host may be unreachable or blocked by network policy). Returned the subscription snapshot only.',
+    );
+  } else if (ticks.length === 0) {
+    warnings.push(
+      'Connected but received no tick updates within the window (market may be closed/quiet or the feed is delayed). Returned the subscription snapshot only.',
+    );
+  }
+
   return {
     uic: input.uic,
     assetType: input.assetType,
     contextId,
     referenceId,
     durationMs: Date.now() - start,
+    connected,
     ticks,
     finalQuote: Object.keys(merged).length > 0 ? merged : undefined,
     controlMessages,
-    _warning: warning,
+    _warning: warnings.length > 0 ? warnings.join(' | ') : undefined,
   };
 }

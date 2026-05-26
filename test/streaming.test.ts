@@ -41,8 +41,8 @@ describe('streamPrices', () => {
     );
 
     const ws = await waitForSocket(sockets);
-    ws.emit(buildFrames([buildFrame('px_211', { Quote: { Bid: 1.5 } })]));
-    ws.emit(buildFrames([buildFrame('px_211', { Quote: { Ask: 2.5 } })]));
+    ws.emit(buildFrames([buildFrame('px-211', { Quote: { Bid: 1.5 } })]));
+    ws.emit(buildFrames([buildFrame('px-211', { Quote: { Ask: 2.5 } })]));
 
     const result = await promise;
 
@@ -64,8 +64,8 @@ describe('streamPrices', () => {
 
     const ws = await waitForSocket(sockets);
     ws.emit(buildFrames([buildFrame('_heartbeat', [{}])]));
-    ws.emit(buildFrames([buildFrame('px_999', { Quote: { Bid: 9 } })])); // foreign refId
-    ws.emit(buildFrames([buildFrame('px_211', { Quote: { Bid: 1.1 } })]));
+    ws.emit(buildFrames([buildFrame('px-999', { Quote: { Bid: 9 } })])); // foreign refId
+    ws.emit(buildFrames([buildFrame('px-211', { Quote: { Bid: 1.1 } })]));
 
     const result = await promise;
 

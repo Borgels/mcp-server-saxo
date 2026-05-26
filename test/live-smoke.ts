@@ -77,7 +77,7 @@ async function main(): Promise<void> {
     console.error(`   note: ${stream._warning}`);
   }
   console.error(
-    `   ticks=${stream.ticks.length} durationMs=${stream.durationMs} ` +
+    `   connected=${stream.connected} ticks=${stream.ticks.length} durationMs=${stream.durationMs} ` +
       `control=[${stream.controlMessages.join(',')}]`,
   );
   console.error('   finalQuote:', JSON.stringify(stream.finalQuote).slice(0, 160));
