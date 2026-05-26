@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SaxoClient } from '../src/saxo/client.js';
-import { getMarketDepth } from '../src/saxo/prices.js';
+import { getMarketDepth, quoteNote } from '../src/saxo/prices.js';
 
 describe('getMarketDepth', () => {
   it('requests the MarketDepth field group and passes the order book through verbatim', async () => {
@@ -57,6 +57,36 @@ describe('getMarketDepth', () => {
     const result = await getMarketDepth(client, { uic: 211, assetType: 'Stock' });
 
     expect(result._warning).toMatch(/NoAccess/);
+  });
+
+  it('adds an explanatory _note when no order book is returned (e.g. OPRA options)', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        Uic: 54740900,
+        AssetType: 'StockOption',
+        Quote: { PriceSource: 'OPRA', PriceTypeAsk: 'Pending', PriceTypeBid: 'Pending' },
+      }),
+    );
+    const client = new SaxoClient({
+      environment: 'sim',
+      accessToken: 'tok',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+
+    const result = await getMarketDepth(client, { uic: 54740900, assetType: 'StockOption' });
+
+    expect(result._note).toMatch(/Level-2 depth/);
+    expect(result._note).toMatch(/OPRA/);
+  });
+});
+
+describe('quoteNote', () => {
+  it('flags closed/delayed/pending quotes and stays silent on tradable ones', () => {
+    expect(
+      quoteNote({ MarketState: 'Closed', DelayedByMinutes: 15, PriceTypeAsk: 'Pending', PriceSource: 'OPRA' }),
+    ).toMatch(/MarketState=Closed.*DelayedByMinutes=15.*PriceType=Pending/);
+    expect(quoteNote({ PriceTypeAsk: 'Tradable', PriceTypeBid: 'Tradable' })).toBeUndefined();
+    expect(quoteNote(undefined)).toBeUndefined();
   });
 });
 

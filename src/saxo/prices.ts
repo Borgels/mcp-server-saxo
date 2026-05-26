@@ -18,6 +18,9 @@ export interface SaxoQuote {
   BidSize?: number;
   PriceTypeAsk?: string;
   PriceTypeBid?: string;
+  PriceSource?: string;
+  MarketState?: string;
+  DelayedByMinutes?: number;
   ErrorCode?: string;
   [key: string]: unknown;
 }
@@ -51,6 +54,7 @@ export interface InfoPriceResponse {
   PriceInfoDetails?: Record<string, unknown>;
   DisplayAndFormat?: Record<string, unknown>;
   _warning?: string;
+  _note?: string;
   [key: string]: unknown;
 }
 
@@ -60,6 +64,38 @@ export const NO_ACCESS_WARNING =
 /** True when a quote indicates the caller lacks live market-data access. */
 export function quoteHasNoAccess(quote: SaxoQuote | undefined): boolean {
   return Boolean(quote && (quote.PriceTypeAsk === 'NoAccess' || quote.PriceTypeBid === 'NoAccess'));
+}
+
+/**
+ * Informational note explaining why a quote may not be actionable (delayed
+ * feed, closed market, or a non-tradable PriceType such as Pending). Helps an
+ * agent interpret Bid/Ask=0 instead of treating it as a real price.
+ */
+export function quoteNote(quote: SaxoQuote | undefined): string | undefined {
+  if (!quote) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  if (typeof quote.MarketState === 'string' && quote.MarketState !== 'Open') {
+    parts.push(`MarketState=${quote.MarketState}`);
+  }
+  if (typeof quote.DelayedByMinutes === 'number' && quote.DelayedByMinutes > 0) {
+    parts.push(`DelayedByMinutes=${quote.DelayedByMinutes}`);
+  }
+  const priceType = quote.PriceTypeAsk ?? quote.PriceTypeBid;
+  if (
+    typeof priceType === 'string' &&
+    priceType !== 'Tradable' &&
+    priceType !== 'Indicative' &&
+    priceType !== 'NoAccess'
+  ) {
+    parts.push(`PriceType=${priceType}`);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  const source = quote.PriceSource ? ` PriceSource=${quote.PriceSource}.` : '';
+  return `Quote may not be actionable (${parts.join(', ')}).${source} Bid/Ask can be 0 when the market is closed or the feed is delayed.`;
 }
 
 export async function getInfoPrice(client: SaxoClient, input: InfoPriceInput): Promise<InfoPriceResponse> {
@@ -95,7 +131,17 @@ export async function getMarketDepth(
     AccountKey: input.accountKey,
     FieldGroups: 'Quote,MarketDepth,PriceInfoDetails,DisplayAndFormat',
   });
-  return annotateInfoPrice(response);
+  const annotated = annotateInfoPrice(response);
+  if (!hasMarketDepth(annotated.MarketDepth)) {
+    const depthNote =
+      'No Level-2 depth returned. This instrument/feed may not publish an order book (e.g. US options priced on OPRA NBBO), or your market-data subscription does not include depth.';
+    return { ...annotated, _note: annotated._note ? `${annotated._note} | ${depthNote}` : depthNote };
+  }
+  return annotated;
+}
+
+function hasMarketDepth(depth: MarketDepth | undefined): boolean {
+  return Boolean(depth && (depth.Bid?.length || depth.Ask?.length));
 }
 
 export interface InfoPriceListInput {
@@ -133,6 +179,10 @@ export async function getInfoPricesList(
 function annotateInfoPrice(response: InfoPriceResponse): InfoPriceResponse {
   if (quoteHasNoAccess(response.Quote)) {
     return { ...response, _warning: NO_ACCESS_WARNING };
+  }
+  const note = quoteNote(response.Quote);
+  if (note) {
+    return { ...response, _note: note };
   }
   return response;
 }
