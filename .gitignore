@@ -19,3 +19,6 @@ policy.live*.json
 live-*.json
 strategy-snapshot*.json
 saxo-audit*.jsonl
+saxo-trading.sqlite
+*.sqlite
+*.sqlite3

@@ -26,7 +26,7 @@ async function main(): Promise<void> {
   console.error('-> saxo_diagnostics');
   const diag = await getDiagnostics(client);
   console.error(
-    `   environment=${diag.environment} dataLevel=${diag.capabilities.dataLevel} ` +
+    `   environment=${diag.environment} tradeLevel=${diag.capabilities.tradeLevel} ` +
       `tokenExpiresInSeconds=${diag.token.expiresInSeconds ?? 'unknown'} warnings=${diag.warnings.length}`,
   );
   for (const w of diag.warnings) {

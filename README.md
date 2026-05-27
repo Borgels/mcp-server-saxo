@@ -115,10 +115,17 @@ There is **no Saxo OpenAPI endpoint** to flip this flag programmatically —
 it's a human consent screen. Find it in the Saxo trading platform
 (SaxoTraderGO → settings → live data subscriptions) or developer.saxo. Once
 accepted, the same token starts returning quotes (typically `DelayedByMinutes: 15`
-on SIM unless your `DataLevel` is `Realtime`).
+unless the current OpenAPI session has `TradeLevel: "FullTradingAndChat"`).
+`DataLevel` should stay at Saxo's default `Standard`; Saxo documents that it
+has no impact for third-party applications.
 
-`saxo_diagnostics` flags this condition in its `warnings[]` and infoprices
-responses are decorated with `_warning` when they're NoAccess.
+Use `saxo_get_session_capabilities` to read `TradeLevel` directly, and
+`saxo_set_session_trade_level` to switch between `FullTradingAndChat` and
+`OrdersOnly`. Only one session per Saxo user can have `FullTradingAndChat`, so
+upgrading this MCP session can downgrade SaxoTraderGO/PRO or another OpenAPI
+session. `saxo_diagnostics` watches session events and flags `TradeLevel`
+problems in `warnings[]`; infoprices responses are decorated with `_warning`
+when they're NoAccess.
 
 ## Authentication
 
@@ -250,7 +257,7 @@ closed — make sure you actually exit before reopening.
   should start, register tools, and wait for stdin without error.
 - Once connected, call `saxo_diagnostics` first when something looks
   off — its `warnings[]` array surfaces missing market-data terms,
-  near-expiry tokens, `DataLevel` not Realtime, and live env without
+  near-expiry tokens, `TradeLevel` not FullTradingAndChat, and LIVE order writes without
   `SAXO_ENABLE_LIVE_TRADING`.
 
 ### Building from source (for hacking or before npm publish)
@@ -290,11 +297,11 @@ Vantage is optional because tiers and rate limits vary. For deeper research,
 run Alpha Vantage's own MCP server beside this Saxo server and pass normalized
 research into `externalContextBySymbol`.
 
-### Strategy and portfolio planning
+### Factor and portfolio context
 
-Use `saxo_screen_stock_strategies` when you want ranked stock ideas with
-account-aware sizing, Saxo quote/liquidity data, Saxo chart context, optional
-fundamentals/news enrichment, risks, and decision briefs:
+Use `saxo_screen_stock_factors` when you want stock factor context with Saxo
+quote/liquidity data, Saxo chart context, optional account sizing, optional
+fundamentals/news enrichment, and warnings:
 
 ```json
 {
@@ -311,16 +318,16 @@ fundamentals/news enrichment, risks, and decision briefs:
 }
 ```
 
-Use `saxo_screen_option_strategies` when you want the server to find
-optionable underlyings first and then rank account-aware option strategy plans:
+Use `saxo_screen_option_strategy_factors` when you want optionable underlyings
+and explicit strategy candidates with liquidity, structure, chart, IV/Greeks,
+optional news, and account sizing factors:
 
 ```json
 {
   "accountKey": "your-account-key",
   "market": "us_nasdaq",
   "underlyingUniverse": "auto",
-  "playbook": "income_30_60d",
-  "riskProfile": "balanced",
+  "strategies": ["put_credit_spread", "iron_condor"],
   "includeAccountContext": true,
   "riskBudgetPercent": 1,
   "requireGreeks": true,
@@ -332,22 +339,16 @@ optionable underlyings first and then rank account-aware option strategy plans:
 }
 ```
 
-Option strategy planning uses Saxo option-chain quotes, Saxo Greeks, optional
-OptionsChain IV context, and account-aware sizing. Multi-leg candidates include
-aggregated net delta, gamma, theta, and vega; long-premium structures such as
-long calls and debit spreads are penalized when theta decay is large relative
-to max risk. Set `requireGreeks=true` to reject candidates when Saxo does not
-return complete delta, gamma, theta, and vega, and use
-`maxThetaDailyPercentOfRisk` to cap acceptable daily decay.
+Option candidate generation uses Saxo option-chain quotes, Saxo Greeks,
+optional OptionsChain IV context, and optional account-aware sizing. The output
+contains factor scores and warnings, not pass/watchlist/reject verdicts or
+confidence labels.
 
-Use `saxo_plan_portfolio_strategy` for whole-account deployment. It reads the
-account snapshot, runs the stock and option screeners, then returns target
-allocation, staged deployment, stock allocation, option satellite candidates,
-sector exposure, and portfolio-level risk warnings. For generic options
-portfolio planning, pass `optionTheses` to describe each options sleeve; stock
-ideas remain first-class through `stockSymbols`, `includeStocks`, stock
-allocation caps, and the stock strategy screener. The planner uses guardrailed
-sizing by default and requires explicit input for concentrated conviction risk:
+Use `saxo_analyze_portfolio_context` for whole-account context. It reads the
+account snapshot, runs the stock and option factor tools, then returns risk
+budgets, stock/option factor summaries, concentration context, sector context,
+and warnings. It does not return target allocations, deployment stages, or
+recommended contract counts:
 
 ```json
 {
@@ -373,7 +374,6 @@ sizing by default and requires explicit input for concentrated conviction risk:
   "stockMaxCandidates": 120,
   "discoverOptionCandidates": true,
   "optionDiscoveryUniverse": "auto",
-  "optionDiscoveryPlaybook": "long_term_directional",
   "optionTheses": [
     {
       "name": "Long-term stock replacement",
@@ -390,44 +390,10 @@ sizing by default and requires explicit input for concentrated conviction risk:
 }
 ```
 
-Portfolio planning is read-only. It never calls precheck or places orders.
-Stock allocation de-duplicates issuer/share-class duplicates such as
-`GOOG`/`GOOGL`. `maxSectorPercent` is enforced when sector data is available
-from fundamentals context; otherwise the response includes a warning instead
-of pretending sector caps were applied. Stock candidate discovery is controlled
-with `stockUniverse`, `stockMarket`, `stockMaxCandidates`, and
-`stockMaxTechnicalCandidates`; if explicit `stockSymbols` are not supplied, the
-stock screener can still build a ranked universe from Saxo data. Option thesis
-output includes selected and rejected candidates, thesis budgets, max-loss
-exposure, expiry buckets, strategy mix, deployment rules, and simple scenario
-notes. Selected option candidates also include `entryTiming`, which classifies
-current price action as `enter`, `scale_in`, `wait`, or `avoid` using the
-underlying price, breakeven, SMA20/SMA50 distance, 5d/20d returns, and recent
-average range. This lets the planner distinguish a buyable pullback from a
-technical breakdown before sizing tranches.
-For an options-only account, set `includeStocks=false`; the planner then keeps
-stock sleeves at zero and treats the options risk budget as the deployable
-account sleeve instead of a small satellite. Use `maxCashDollars` when the cash
-reserve is a hard dollar cap rather than only a percentage. With
-`deploymentStyle="immediate"`, options-only contract counts scale up to the
-configured thesis, trade, and cash-reserve budgets; staged plans remain
-starter-sized. The risk dashboard reports `deployableCashDollars`,
-`cashReserveDollars`, `unallocatedOptionBudget`, and warns when a strict
-options-only plan leaves material cash undeployed because no additional
-Greek-backed candidates fit the current rules.
-Set `discoverOptionCandidates=true` to blend user-supplied conviction theses
-with a deterministic discovery sleeve from Saxo's market mover and option
-screeners. Discovery candidates are still filtered by liquidity, Greeks, theta,
-account sizing, and the same portfolio risk caps.
-Use `portfolioProfile="concentrated_conviction"` plus
-`maxSelectedUnderlyings`, `minPositionRiskDollars`, `maxContractsPerPosition`,
-and `fragmentationPolicy="reject"` when the account should favor fewer,
-larger, easier-to-monitor option positions instead of many small trades.
-If the Saxo account is not approved for short option legs, set
-`allowShortOptionLegs=false` on option strategy or portfolio planning calls.
-The planner then filters out spreads and short-premium structures that open a
-short option leg and only returns long-only option structures that pass the
-remaining liquidity, Greeks, and theta gates.
+Set `discoverOptionCandidates=true` to blend user-supplied option symbols or
+theses with deterministic discovery from Saxo market movers. If the Saxo
+account is not approved for short option legs, set `allowShortOptionLegs=false`;
+short-leg structures are filtered from candidate generation.
 
 Use `saxo_review_strategy_positions` after execution to monitor open stock and
 option strategies against the plan you opened. Pass the executed stock leg or
@@ -452,7 +418,8 @@ rules.
 | --- | --- | --- |
 | `saxo_capabilities` | — | Discover tools without calling Saxo. |
 | `saxo_session_me` | `GET /port/v1/users/me` | Authenticated user (Name, ClientKey, UserKey, MarketDataViaOpenApiTermsAccepted). |
-| `saxo_diagnostics` | (aggregated) | Session + capabilities + token expiry + warnings (market-data terms, DataLevel, token close to expiry). |
+| `saxo_get_session_capabilities` | `GET /root/v1/sessions/capabilities` | Current AuthenticationLevel, DataLevel, and TradeLevel without running diagnostics. |
+| `saxo_diagnostics` | (aggregated) | Session + capabilities + token expiry + warnings (market-data terms, TradeLevel, token close to expiry). |
 | `saxo_feature_availability` | `GET /root/v1/features/availability` | Inspect Saxo feature flags for News, Calendar, Gainers/Losers, and Chart. |
 | `saxo_search_instruments` | `GET /ref/v1/instruments` | Search by keyword + asset type. |
 | `saxo_get_instrument_details` | `GET /ref/v1/instruments/details` | Detailed metadata for one or many Uics. |
@@ -467,10 +434,10 @@ rules.
 | `saxo_screen_market` | Saxo instruments + info prices | User-friendly top gainers/losers and pre-market screeners. |
 | `saxo_compute_spread_quote` | (uses infoprices) | Fetch bid/ask per leg and compute worst-case, mid, best-case net debit for a multi-leg spread. |
 | `saxo_estimate_vertical_spread` | (pure math) | Given side + strikes + debit + contracts: max loss, max gain, breakeven, R/R. Applies 100x option multiplier. |
-| `saxo_plan_option_strategy` | Option chain + prices | Opinionated read-only option strategy plans. |
-| `saxo_screen_option_strategies` | Market screener + chart TA + OptionsChain IV + planner | Cross-symbol options strategy screening. |
-| `saxo_screen_stock_strategies` | Saxo instruments + prices + chart TA + optional fundamentals/news | Opinionated stock strategy screening with decision briefs. |
-| `saxo_plan_portfolio_strategy` | Account snapshot + stock/options screeners | Whole-account target allocation, staged deployment, and risk dashboard. |
+| `saxo_generate_option_strategy_candidates` | Option chain + prices | Explicit option strategy candidates with factor scores. |
+| `saxo_screen_option_strategy_factors` | Market screener + chart TA + OptionsChain IV + planner | Cross-symbol option factor screening. |
+| `saxo_screen_stock_factors` | Saxo instruments + prices + chart TA + optional fundamentals/news | Stock factor screening without verdicts. |
+| `saxo_analyze_portfolio_context` | Account snapshot + stock/options factor tools | Whole-account factor, budget, and constraint context. |
 | `saxo_review_strategy_positions` | Positions + quotes (+ Greeks for options) | Post-execution strategy follow-up with hold/trim/close/roll verdicts. |
 | `saxo_list_accounts` | `GET /port/v1/accounts/me` | List the client's trading accounts. |
 | `saxo_get_balance` | `GET /port/v1/balances` | Cash + margin balance. |
@@ -500,6 +467,7 @@ rules.
 | `saxo_update_price_alert` | `PUT /vas/v1/pricealerts/definitions/{id}` | Partial tool input is merged with the current definition before PUT. |
 | `saxo_delete_price_alerts` | `DELETE /vas/v1/pricealerts/definitions/{ids}` | Delete one or more price alerts. |
 | `saxo_update_price_alert_user_settings` | `PUT /vas/v1/pricealerts/usersettings` | Update email/popup/sound settings. |
+| `saxo_set_session_trade_level` | `PATCH /root/v1/sessions/capabilities` | LIVE requires `policy.allow_live_session_capability_writes=true`; can downgrade other Saxo sessions. |
 | `saxo_oauth_login` | OAuth2 PKCE | One-call local login; updates in-process tokens. Optional env-file persist. |
 | `saxo_oauth_start` | OAuth2 PKCE | Loopback redirect only; reads app creds from env. |
 | `saxo_oauth_complete` | OAuth2 PKCE | Replaces in-process tokens. Optional `.env` persist. |
@@ -590,6 +558,7 @@ A copy of `policy.example.json` is included. Supported fields:
 | --- | --- |
 | `allow_live_writes` | Master switch for all order writes on LIVE. |
 | `allow_live_alert_writes` | Master switch for price-alert create/update/delete/settings writes on LIVE. |
+| `allow_live_session_capability_writes` | Allows changing LIVE session TradeLevel (`FullTradingAndChat` / `OrdersOnly`). |
 | `require_precheck_on_live` | Place-order automatically runs precheck first. |
 | `allow_short_option_legs` | Set to `false` when the Saxo option profile does not permit opening short option legs; multi-leg write tools then block sell-to-open option legs before calling Saxo. |
 | `allowed_asset_types` | Whitelist of AssetTypes that may be ordered. |

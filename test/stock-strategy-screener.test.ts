@@ -5,7 +5,7 @@ import { setMarketContextFetchImpl } from '../src/saxo/market-context.js';
 import { screenStockStrategies } from '../src/saxo/stock-strategy-screener.js';
 
 describe('screenStockStrategies', () => {
-  it('returns account-aware stock decision briefs with Alpha Vantage market cap fundamentals', async () => {
+  it('returns account-aware stock factors with Alpha Vantage market cap fundamentals', async () => {
     const previousKey = process.env.ALPHA_VANTAGE_API_KEY;
     process.env.ALPHA_VANTAGE_API_KEY = 'demo-key';
     const fetchMock = stockFetchMock();
@@ -36,16 +36,16 @@ describe('screenStockStrategies', () => {
         marketCapitalization: 250_000_000_000,
         marketCapBucket: 'mega',
       });
-      expect(result.Data[0]?.rankingBreakdown.finalScore).toEqual(expect.any(Number));
+      expect(result.Data[0]?.factorScores).toMatchObject({
+        liquidityScore: expect.any(Number),
+        trendScore: expect.any(Number),
+        accountFitScore: expect.any(Number),
+      });
       expect(result.Data[0]?.positionSizing).toMatchObject({
-        sizingVerdict: 'pass',
+        sizingStatus: 'fits',
         maxRiskBudget: 1_000,
       });
-      expect(result.decisionBriefs[0]).toMatchObject({
-        symbol: 'AAA',
-        verdict: expect.stringMatching(/pass|watchlist/),
-        confidence: expect.stringMatching(/low|medium|high/),
-      });
+      expect(result).not.toHaveProperty('decisionBriefs');
       const priceCalls = fetchMock.mock.calls.filter(call => String(call[0]).includes('/trade/v1/infoprices/list'));
       expect(priceCalls).toHaveLength(1);
       expect(fetchMock.mock.calls.some(call => String(call[0]).includes('function=OVERVIEW'))).toBe(true);
@@ -76,7 +76,7 @@ describe('screenStockStrategies', () => {
     );
 
     expect(result.Data).toHaveLength(0);
-    expect(result.blockedOrDeferredIdeas[0]?.positionSizing?.sizingVerdict).toBe('too_large');
+    expect(result.constraintLimitedCandidates[0]?.positionSizing?.sizingStatus).toBe('over_budget');
   });
 });
 
@@ -102,19 +102,10 @@ describe('planPortfolioStrategy', () => {
       accountContextAvailable: true,
       netValue: 100_000,
       cashAvailable: 100_000,
-      investedPercent: 0,
     });
-    expect(result.targetAllocation.map(item => item.sleeve)).toEqual([
-      'cash_reserve',
-      'stock_core',
-      'stock_tactical',
-      'options_satellite',
-    ]);
-    expect(result.deploymentPlan).toHaveLength(3);
     expect(result.stockScreen?.Data.length).toBeGreaterThan(0);
-    expect(result.stockAllocationPlan).toHaveLength(2);
-    expect(result.riskDashboard.plannedStockNotional).toBeGreaterThan(15_000);
-    expect(result.riskDashboard.unallocatedStockTarget).toBeGreaterThan(0);
+    expect(result.stockContext).toHaveLength(2);
+    expect(result.riskBudgets.perIdeaRiskBudgetDollars).toBe(1_000);
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/trade/v2/orders'))).toBe(false);
   });
 
@@ -140,9 +131,9 @@ describe('planPortfolioStrategy', () => {
         new Date('2026-01-01T00:00:00.000Z'),
       );
 
-      expect(result.stockAllocationPlan.map(item => item.sector)).toEqual(['Technology', 'Industrials']);
-      expect(result.riskDashboard.sectorExposure.Technology).toBeLessThanOrEqual(5_000);
-      expect(result.riskDashboard.sectorExposure.Industrials).toBeLessThanOrEqual(5_000);
+      expect(result.stockContext.map(item => item.sector)).toEqual(['Technology', 'Industrials']);
+      expect(result.constraintSummary.sectorExposure.Technology).toBe(1);
+      expect(result.constraintSummary.sectorExposure.Industrials).toBe(1);
     } finally {
       if (previousKey === undefined) {
         delete process.env.ALPHA_VANTAGE_API_KEY;

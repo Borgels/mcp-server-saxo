@@ -17,7 +17,7 @@ import {
   normalizeOptionChain,
   type OptionChainRawResponse,
 } from '../src/saxo/reference.js';
-import { inspectAccessToken } from '../src/saxo/session.js';
+import { inspectAccessToken, parseSaxoStreamMessages } from '../src/saxo/session.js';
 
 describe('findOptionLeg compresses 4-step option discovery into one call', () => {
   it('returns the call Uic for a clean single-root match', async () => {
@@ -929,6 +929,49 @@ describe('inspectAccessToken', () => {
   it('returns decoded=false for non-JWT strings', () => {
     expect(inspectAccessToken('plain-token').decoded).toBe(false);
     expect(inspectAccessToken(undefined).decoded).toBe(false);
+  });
+});
+
+describe('Saxo session capability stream parsing', () => {
+  it('parses JSON capability updates from Saxo binary stream frames', () => {
+    const payload = JSON.stringify([
+      {
+        ReferenceId: 'session-capabilities',
+        Data: { TradeLevel: 'OrdersOnly' },
+      },
+    ]);
+    const referenceId = 'session-capabilities';
+    const payloadBytes = Buffer.from(payload, 'utf8');
+    const referenceBytes = Buffer.from(referenceId, 'ascii');
+    const buffer = Buffer.alloc(8 + 2 + 1 + referenceBytes.length + 1 + 4 + payloadBytes.length);
+
+    let offset = 0;
+    buffer.writeBigUInt64LE(1n, offset);
+    offset += 8;
+    buffer.writeUInt16LE(0, offset);
+    offset += 2;
+    buffer.writeUInt8(referenceBytes.length, offset);
+    offset += 1;
+    referenceBytes.copy(buffer, offset);
+    offset += referenceBytes.length;
+    buffer.writeUInt8(0, offset);
+    offset += 1;
+    buffer.writeUInt32LE(payloadBytes.length, offset);
+    offset += 4;
+    payloadBytes.copy(buffer, offset);
+
+    expect(parseSaxoStreamMessages(buffer)).toEqual([
+      {
+        referenceId,
+        payloadFormat: 0,
+        payload: [
+          {
+            ReferenceId: referenceId,
+            Data: { TradeLevel: 'OrdersOnly' },
+          },
+        ],
+      },
+    ]);
   });
 });
 

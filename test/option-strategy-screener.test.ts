@@ -107,7 +107,7 @@ describe('screenOptionStrategies', () => {
     expect(optionsChainCleanup).toBeTruthy();
   });
 
-  it('adds account-aware sizing, ranking breakdown, and decision briefs by default', async () => {
+  it('adds account-aware sizing and neutral factor scores by default', async () => {
     const fetchMock = strategyScreenerFetchMock();
     const client = testClient(fetchMock);
 
@@ -131,21 +131,15 @@ describe('screenOptionStrategies', () => {
       positionsCount: 0,
     });
     expect(result.Data[0]?.positionSizing).toMatchObject({
-      sizingVerdict: 'pass',
+      sizingStatus: 'fits',
       maxRiskBudget: 1_000,
     });
-    expect(result.Data[0]?.rankingBreakdown).toMatchObject({
+    expect(result.Data[0]?.factorScores).toMatchObject({
       liquidityScore: expect.any(Number),
-      playbookFitScore: expect.any(Number),
+      structureScore: expect.any(Number),
       accountFitScore: expect.any(Number),
-      finalScore: expect.any(Number),
     });
-    expect(result.decisionBriefs[0]).toMatchObject({
-      symbol: 'AAA',
-      verdict: expect.stringMatching(/pass|watchlist/),
-      confidence: expect.stringMatching(/low|medium|high/),
-      accountFit: expect.objectContaining({ sizingVerdict: 'pass' }),
-    });
+    expect(result).not.toHaveProperty('decisionBriefs');
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/port/v1/balances'))).toBe(true);
     expect(fetchMock.mock.calls.some(call => String(call[0]).includes('/port/v1/positions'))).toBe(true);
   });
@@ -168,10 +162,9 @@ describe('screenOptionStrategies', () => {
     );
 
     expect(result.Data[0]?.positionSizing).toMatchObject({
-      sizingVerdict: 'too_large',
+      sizingStatus: 'over_budget',
       maxContracts: 0,
     });
-    expect(result.decisionBriefs[0]?.verdict).toBe('reject');
   });
 
   it('does not fetch portfolio endpoints when account context is disabled', async () => {
@@ -293,7 +286,7 @@ describe('screenOptionStrategies', () => {
     expect(result.warnings.join(' ')).toContain('Stopped option strategy screening early');
   });
 
-  it('builds guardrailed options portfolio sleeves from explicit option theses', async () => {
+  it('returns neutral portfolio option context from explicit theses', async () => {
     const client = testClient(strategyScreenerFetchMock());
 
     const result = await planPortfolioStrategy(
@@ -306,254 +299,23 @@ describe('screenOptionStrategies', () => {
         maxOptionIdeas: 3,
         optionTheses: [
           {
-            name: 'AAA conviction',
+            name: 'AAA context',
             symbols: ['AAA'],
-            role: 'core_conviction',
-            conviction: 'high',
-            horizon: 'swing',
             preferredStructures: ['debit_spread', 'put_credit_spread'],
-            targetRiskPercent: 50,
           },
         ],
       },
       new Date('2026-01-01T00:00:00.000Z'),
     );
 
-    expect(result.optionsPortfolioPlan).toMatchObject({
-      mode: 'guardrailed',
-      totalBudget: 20_000,
-    });
-    expect(result.optionsPortfolioPlan?.sleeves[0]).toMatchObject({
-      thesisName: 'AAA conviction',
-      targetRisk: 10_000,
-    });
-    expect(result.optionsPortfolioPlan?.selectedCandidates.length).toBeGreaterThan(0);
-    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.plannedRisk).toBeLessThanOrEqual(5_000);
-    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.greeks).toMatchObject({
-      theta: expect.any(Number),
-      thetaDailyPercentOfRisk: expect.any(Number),
-    });
-    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.rationale).toContain('Net theta');
-    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.entryTiming).toMatchObject({
-      verdict: expect.stringMatching(/enter|scale_in|wait|avoid/),
-      starterTranchePercent: expect.any(Number),
-      addRule: expect.any(String),
-      invalidateRule: expect.any(String),
-      rationale: expect.arrayContaining([expect.any(String)]),
-    });
-    expect(result.optionsRiskDashboard).toMatchObject({
-      maxOptionsRiskDollars: 20_000,
-      maxThesisRiskDollars: 10_000,
-      maxSingleTradeRiskDollars: 5_000,
-    });
-    expect(result.optionAllocationPlan[0]).toMatchObject({
+    expect(result.optionContext.length).toBeGreaterThan(0);
+    expect(result.optionContext[0]).toMatchObject({
       symbol: 'AAA',
-      recommendedContracts: 1,
+      factorScores: expect.objectContaining({ liquidityScore: expect.any(Number) }),
+      sizingStatus: expect.any(String),
     });
-  });
-
-  it('can hard-reject options portfolio candidates when Saxo Greeks are missing', async () => {
-    const client = testClient(strategyScreenerFetchMock({ omitGreeks: true }));
-
-    const result = await planPortfolioStrategy(
-      client,
-      {
-        accountKey: 'account-1',
-        includeStocks: false,
-        includeOptions: true,
-        requireGreeks: true,
-        maxOptionsRiskPercent: 50,
-        optionTheses: [
-          {
-            name: 'AAA options only',
-            symbols: ['AAA'],
-            role: 'core_conviction',
-            horizon: 'swing',
-            preferredStructures: ['debit_spread'],
-          },
-        ],
-      },
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    expect(result.targetAllocation.find(item => item.sleeve === 'stock_core')?.targetPercent).toBe(0);
-    expect(result.targetAllocation.find(item => item.sleeve === 'stock_tactical')?.targetPercent).toBe(0);
-    expect(result.optionsPortfolioPlan?.selectedCandidates).toHaveLength(0);
-    expect(result.optionsPortfolioPlan?.rejectedCandidates[0]?.reason).toContain('complete Saxo Greeks were unavailable');
-  });
-
-  it('uses multi-leg price snapshot Greeks before applying the hard Greeks gate', async () => {
-    const client = testClient(strategyScreenerFetchMock({ omitGreeks: true, multilegGreeks: true }));
-
-    const result = await planPortfolioStrategy(
-      client,
-      {
-        accountKey: 'account-1',
-        includeStocks: false,
-        includeOptions: true,
-        requireGreeks: true,
-        maxOptionsRiskPercent: 50,
-        optionTheses: [
-          {
-            name: 'AAA options only',
-            symbols: ['AAA'],
-            role: 'core_conviction',
-            horizon: 'swing',
-            preferredStructures: ['debit_spread'],
-          },
-        ],
-      },
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    expect(result.optionsPortfolioPlan?.selectedCandidates.length).toBeGreaterThan(0);
-    expect(result.optionsPortfolioPlan?.selectedCandidates[0]?.greeks).toMatchObject({
-      theta: expect.any(Number),
-      vega: expect.any(Number),
-    });
-  });
-
-  it('scales options-only immediate plans to the configured risk budgets', async () => {
-    const client = testClient(strategyScreenerFetchMock());
-
-    const result = await planPortfolioStrategy(
-      client,
-      {
-        accountKey: 'account-1',
-        includeStocks: false,
-        includeOptions: true,
-        deploymentStyle: 'immediate',
-        maxCashDollars: 1_000,
-        maxOptionsRiskPercent: 20,
-        maxThesisRiskPercent: 20,
-        maxSingleTradeRiskPercent: 20,
-        riskBudgetPercentPerIdea: 20,
-        optionTheses: [
-          {
-            name: 'AAA immediate options only',
-            symbols: ['AAA'],
-            role: 'core_conviction',
-            horizon: 'swing',
-            preferredStructures: ['debit_spread'],
-            targetRiskPercent: 20,
-          },
-        ],
-      },
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    const selected = result.optionsPortfolioPlan?.selectedCandidates[0];
-    expect(result.targetAllocation.find(item => item.sleeve === 'cash_reserve')?.targetDollars).toBe(1_000);
-    expect(selected?.recommendedContracts).toBeGreaterThan(1);
-    expect(selected?.sizing).toMatchObject({
-      mode: 'budget_scaled',
-      riskPerContract: expect.any(Number),
-      maxContractsByBudget: selected?.recommendedContracts,
-    });
-    expect(result.riskDashboard.cashAfterPlan).toBeLessThan(50_000);
-    expect(result.riskDashboard.unallocatedOptionBudget).toBeGreaterThanOrEqual(0);
-    expect(result.riskDashboard.warnings.join(' ')).toContain('Options-only plan leaves material cash');
-  });
-
-  it('can combine explicit option theses with discovered option candidates', async () => {
-    const client = testClient(strategyScreenerFetchMock());
-
-    const result = await planPortfolioStrategy(
-      client,
-      {
-        accountKey: 'account-1',
-        includeStocks: false,
-        includeOptions: true,
-        discoverOptionCandidates: true,
-        optionDiscoveryUniverse: 'bullish_movers',
-        optionDiscoveryMaxSymbolsToPlan: 2,
-        optionDiscoveryTargetRiskPercent: 10,
-        maxOptionIdeas: 4,
-        optionTheses: [
-          {
-            name: 'AAA conviction',
-            symbols: ['AAA'],
-            role: 'core_conviction',
-            horizon: 'swing',
-            preferredStructures: ['debit_spread'],
-          },
-        ],
-      },
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    expect(result.optionScreen?.underlyings.some(item => item.source === 'market_screener')).toBe(true);
-    expect(result.optionsPortfolioPlan?.sleeves).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        thesisName: 'Discovered option candidates',
-        symbols: expect.arrayContaining(['BBB']),
-        targetRisk: 5_000,
-      }),
-    ]));
-    expect(result.optionsPortfolioPlan?.selectedCandidates.some(candidate => candidate.symbol === 'BBB')).toBe(true);
-  });
-
-  it('supports concentrated conviction controls for fewer monitorable options positions', async () => {
-    const client = testClient(strategyScreenerFetchMock());
-
-    const result = await planPortfolioStrategy(
-      client,
-      {
-        accountKey: 'account-1',
-        includeStocks: false,
-        includeOptions: true,
-        discoverOptionCandidates: true,
-        portfolioProfile: 'concentrated_conviction',
-        deploymentStyle: 'immediate',
-        maxSelectedUnderlyings: 1,
-        minPositionRiskDollars: 1_000,
-        maxContractsPerPosition: 20,
-        fragmentationPolicy: 'reject',
-        maxOptionsRiskPercent: 20,
-        maxThesisRiskPercent: 20,
-        maxSingleTradeRiskPercent: 20,
-        riskBudgetPercentPerIdea: 20,
-      },
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    const selectedSymbols = new Set(result.optionsPortfolioPlan?.selectedCandidates.map(candidate => candidate.symbol));
-    expect(selectedSymbols.size).toBeLessThanOrEqual(1);
-    expect(result.optionsPortfolioPlan?.selectedCandidates.every(candidate => (candidate.plannedRisk ?? 0) >= 1_000)).toBe(true);
-    expect(result.optionsPortfolioPlan?.rejectedCandidates.some(candidate =>
-      candidate.reason.includes('maxSelectedUnderlyings') ||
-      candidate.reason.includes('below minPositionRiskDollars') ||
-      candidate.reason.includes('maxContractsPerPosition'),
-    )).toBe(true);
-  });
-
-  it('keeps option-root failures visible as rejected portfolio candidates', async () => {
-    const client = testClient(strategyScreenerFetchMock());
-
-    const result = await planPortfolioStrategy(
-      client,
-      {
-        accountKey: 'account-1',
-        includeStocks: false,
-        includeOptions: true,
-        optionTheses: [
-          {
-            name: 'Unavailable options',
-            symbols: ['MISS'],
-            preferredStructures: ['long_call'],
-            horizon: 'leaps',
-          },
-        ],
-      },
-      new Date('2026-01-01T00:00:00.000Z'),
-    );
-
-    expect(result.optionsPortfolioPlan?.selectedCandidates).toHaveLength(0);
-    expect(result.optionsPortfolioPlan?.rejectedCandidates[0]).toMatchObject({
-      thesisName: 'Unavailable options',
-      symbol: 'MISS',
-      reason: expect.stringContaining('No StockOption root'),
-    });
+    expect(result).not.toHaveProperty('optionsPortfolioPlan');
+    expect(result).not.toHaveProperty('optionAllocationPlan');
   });
 });
 

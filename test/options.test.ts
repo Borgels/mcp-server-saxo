@@ -88,7 +88,12 @@ describe('options tools', () => {
     expect(result.Data.some(plan => plan.strategy === 'iron_condor')).toBe(true);
     expect(result.Data.some(plan => plan.singleLegPrecheckInput || plan.multilegPrecheckInput)).toBe(true);
     expect(result.Data.filter(plan => plan.legs.length > 1).every(plan => plan.pricing !== undefined)).toBe(true);
-    expect(result.Data[0]?.score.total).toBeGreaterThanOrEqual(result.Data[1]?.score.total ?? 0);
+    expect(result.Data[0]?.score).toMatchObject({
+      liquidity: expect.any(Number),
+      structure: expect.any(Number),
+      context: expect.any(Number),
+      greekRisk: expect.any(Number),
+    });
   });
 
   it('filters strategy candidates by risk budget', async () => {

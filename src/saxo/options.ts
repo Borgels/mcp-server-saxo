@@ -39,8 +39,8 @@ export interface GetOptionChainInput {
 }
 
 export interface PlanOptionStrategyInput extends GetOptionChainInput {
-  accountKey: string;
-  strategies?: OptionStrategyKind[];
+  accountKey?: string;
+  strategies: OptionStrategyKind[];
   maxCandidates?: number;
   riskBudget?: number;
   allowShortOptionLegs?: boolean;
@@ -256,7 +256,7 @@ export interface OptionStrategyPlan {
     liquidity: number;
     structure: number;
     context: number;
-    total: number;
+    greekRisk: number;
   };
   warnings: string[];
   underlyingPrice?: number;
@@ -381,7 +381,10 @@ export async function planOptionStrategy(
   input: PlanOptionStrategyInput,
   now: Date = new Date(),
 ): Promise<OptionStrategyPlanResult> {
-  const strategies = input.strategies?.length ? input.strategies : DEFAULT_STRATEGIES;
+  if (!input.strategies?.length) {
+    throw new Error('strategies is required; option candidate generation does not choose a default strategy set.');
+  }
+  const strategies = input.strategies;
   const warnings: string[] = [];
   const chain = await getOptionChain(client, {
     ...input,
@@ -433,10 +436,16 @@ export async function planOptionStrategy(
 
   const prefilteredPlans = plans
     .filter(plan => input.riskBudget === undefined || plan.maxLoss === undefined || plan.maxLoss <= input.riskBudget)
-    .sort((a, b) => b.score.total - a.score.total)
+    .sort((a, b) => optionPlanSortScore(b) - optionPlanSortScore(a))
     .slice(0, prePricingCandidateLimit(plans.length, maxCandidates, input));
 
-  await enrichTradablePricing(client, input.accountKey, prefilteredPlans);
+  if (input.accountKey) {
+    await enrichTradablePricing(client, input.accountKey, prefilteredPlans);
+  } else {
+    for (const plan of prefilteredPlans) {
+      plan.warnings.push('Tradable pricing and Saxo Greeks were skipped because accountKey was not supplied.');
+    }
+  }
 
   const { plans: greekFilteredPlans, missingGreeksCount, thetaFilteredCount } = filterByGreekRequirements(prefilteredPlans, input);
   warnings.push(...greekFilterWarnings({ missingGreeksCount, thetaFilteredCount }, input));
@@ -445,7 +454,7 @@ export async function planOptionStrategy(
   warnings.push(...shortOptionPermissionWarnings({ shortOptionFilteredCount, restrictedShortCallFilteredCount }, input));
 
   const ranked = permissionFilteredPlans
-    .sort((a, b) => b.score.total - a.score.total)
+    .sort((a, b) => optionPlanSortScore(b) - optionPlanSortScore(a))
     .slice(0, maxCandidates)
     .map((plan, index) => ({ ...plan, rank: index + 1 }));
 
@@ -472,10 +481,15 @@ async function resolveEffectiveStrategyContext(
   let volatility = input.optionVolatilityContext;
   if (!volatility && input.includeVolatilityContext) {
     try {
-      volatility = await getOptionVolatilityContext(client, {
-        accountKey: input.accountKey,
-        optionRootId,
-      });
+      volatility = input.accountKey
+        ? await getOptionVolatilityContext(client, {
+          accountKey: input.accountKey,
+          optionRootId,
+        })
+        : undefined;
+      if (!input.accountKey) {
+        warnings.push('Saxo option volatility context was skipped because accountKey was not supplied.');
+      }
     } catch (error) {
       warnings.push(`Saxo option volatility context was unavailable: ${(error as Error).message}`);
     }
@@ -1117,7 +1131,6 @@ function basePlan(
   const structure = scoreStructure(strategy, economics, chain.optionRoot.underlyingPrice, daysToExpiry);
   const context = scoreContext(strategy, input);
   const greekScore = scoreGreekRisk(strategy, greeks);
-  const total = roundScore(liquidity * 0.3 + structure * 0.3 + context * 0.25 + greekScore * 0.15);
   const warnings = collectPlanWarnings(legs, economics, strategy, greeks, daysToExpiry);
   const orderPrice = economics.estimatedCredit ?? economics.estimatedDebit ?? 0;
   const plan: OptionStrategyPlan = {
@@ -1128,7 +1141,7 @@ function basePlan(
       liquidity,
       structure,
       context,
-      total,
+      greekRisk: greekScore,
     },
     warnings,
     underlyingPrice: chain.optionRoot.underlyingPrice,
@@ -1239,13 +1252,17 @@ function strategyGreeksFromSaxo(
 
 function refreshGreekDependentFields(plan: OptionStrategyPlan): void {
   const greekScore = scoreGreekRisk(plan.strategy, plan.greeks);
-  plan.score.total = roundScore(
+  plan.score.greekRisk = greekScore;
+  plan.warnings = refreshGreekWarnings(plan.warnings, plan.strategy, plan.greeks, plan.daysToExpiry);
+}
+
+export function optionPlanSortScore(plan: Pick<OptionStrategyPlan, 'score'>): number {
+  return roundScore(
     plan.score.liquidity * 0.3 +
     plan.score.structure * 0.3 +
     plan.score.context * 0.25 +
-    greekScore * 0.15,
+    plan.score.greekRisk * 0.15,
   );
-  plan.warnings = refreshGreekWarnings(plan.warnings, plan.strategy, plan.greeks, plan.daysToExpiry);
 }
 
 function refreshGreekWarnings(

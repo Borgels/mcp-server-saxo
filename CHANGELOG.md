@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `saxo_get_session_capabilities` and `saxo_set_session_trade_level` expose
+  Saxo session capabilities and allow confirmed `TradeLevel` changes.
+- Session capability diagnostics now keep an in-memory last-known state from a
+  `/root/v1/sessions/events/subscriptions/active` streaming subscription.
+- `npm run probe:marketoverview` probes Saxo MarketOverview/GainersLosers
+  candidate endpoints and prints read-only status summaries.
+
+### Changed
+
+- Breaking: strategy screeners were renamed to neutral factor/context tools:
+  `saxo_generate_option_strategy_candidates`,
+  `saxo_screen_option_strategy_factors`, `saxo_screen_stock_factors`, and
+  `saxo_analyze_portfolio_context`.
+- Stock, option, and portfolio context tools now return factor scores, sizing
+  status, budgets, and warnings instead of pass/watchlist/reject verdicts,
+  confidence labels, decision briefs, allocation plans, or deployment stages.
+
+### Fixed
+
+- Market-data diagnostics now warn on `TradeLevel != FullTradingAndChat`
+  instead of treating `DataLevel` as the real-time switch.
+
 ## [0.2.2] - 2026-05-21
 
 ### Added
@@ -79,7 +103,7 @@ read-only: no strategy screener/planner calls precheck or places orders.
 - Portfolio planning now distinguishes per-trade risk budgets from portfolio
   stock allocation, so core positions can deploy toward account-level targets
   while tactical/options ideas remain risk-budgeted.
-- `saxo_plan_portfolio_strategy` now exposes stock discovery controls so the
+- `saxo_analyze_portfolio_context` now exposes stock discovery controls so the
   tool remains a stocks + options planner, not options-only.
 - Saxo option strategy pricing uses multi-leg/snapshot Greeks before applying
   hard Greeks gates, so theta/vega/delta/gamma inform reward/risk and decay

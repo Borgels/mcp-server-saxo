@@ -136,6 +136,29 @@ describe('Saxo policy', () => {
     ).toMatchObject({ allowed: true });
   });
 
+  it('guards LIVE session capability writes through policy only', () => {
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_set_session_trade_level',
+        environment: 'live',
+        liveTradingEnabled: false,
+        policy: { ...DEFAULT_POLICY, allow_live_session_capability_writes: false },
+      }),
+    ).toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/allow_live_session_capability_writes=false/),
+    });
+
+    expect(
+      checkToolAllowed({
+        tool: 'saxo_set_session_trade_level',
+        environment: 'live',
+        liveTradingEnabled: false,
+        policy: { ...DEFAULT_POLICY, allow_live_session_capability_writes: true },
+      }),
+    ).toMatchObject({ allowed: true });
+  });
+
   it('denies unknown tools', () => {
     const decision = checkToolAllowed({
       tool: 'saxo_drop_database',

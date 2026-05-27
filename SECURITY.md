@@ -30,3 +30,8 @@ LIVE order placement is denied by default. Enabling it requires explicit
 opt-in via `SAXO_ENVIRONMENT=live`, `SAXO_ENABLE_LIVE_TRADING=true`, and a
 `policy.json` that sets `allow_live_writes: true`. Treat any path that
 weakens these guards as a security issue and report it via the address above.
+
+LIVE session capability changes are separately denied by default and require
+`policy.allow_live_session_capability_writes=true`. This does not enable order
+writes, but `TradeLevel=FullTradingAndChat` can downgrade other Saxo sessions
+for the same user.

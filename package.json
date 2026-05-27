@@ -28,6 +28,7 @@
     "dev": "tsx src/transports/stdio.ts",
     "dev:http": "tsx src/transports/http.ts",
     "auth": "tsx src/bin/auth.ts",
+    "probe:marketoverview": "tsx src/bin/probe-marketoverview.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepare": "npm run build",
@@ -64,6 +65,7 @@
   "homepage": "https://github.com/borgels/mcp-server-saxo#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.21.0",
     "zod": "^4.4.3"
   },
   "overrides": {
@@ -73,6 +75,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
+    "@types/ws": "^8.18.1",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",

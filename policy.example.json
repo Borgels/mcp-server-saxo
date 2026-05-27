@@ -1,6 +1,7 @@
 {
   "allow_live_writes": false,
   "allow_live_alert_writes": false,
+  "allow_live_session_capability_writes": false,
   "require_precheck_on_live": true,
   "allow_short_option_legs": true,
   "allowed_asset_types": [

@@ -28,6 +28,9 @@ policy.live*.json
 live-*.json
 strategy-snapshot*.json
 saxo-audit*.jsonl
+saxo-trading.sqlite
+*.sqlite
+*.sqlite3
 
 # Dev dependencies — listed in package.json devDependencies. mcpb does
 # not prune by default. The release workflow runs `npm ci --omit=dev`

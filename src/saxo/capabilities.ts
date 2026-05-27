@@ -51,12 +51,41 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     id: 'saxo_diagnostics',
     title: 'Saxo OpenAPI Diagnostics',
     description:
-      'Aggregate session info, capabilities, token expiry, environment, and warnings (market-data terms not accepted, DataLevel not Realtime, token expiring soon). Call this first when prices look wrong or write tools fail.',
+      'Aggregate session info, capabilities, token expiry, environment, and warnings (market-data terms not accepted, TradeLevel not FullTradingAndChat, token expiring soon). Call this first when prices look wrong or write tools fail.',
     risk: 'read',
     examples: [{}],
     identifierFormats: [],
     safetyNotes: ['Read-only.'],
     keywords: ['diagnostics', 'health', 'ping', 'warnings', 'check', 'token'],
+  },
+  {
+    id: 'saxo_get_session_capabilities',
+    title: 'Get Saxo Session Capabilities',
+    description:
+      'Return current session capabilities directly from /root/v1/sessions/capabilities, including TradeLevel and DataLevel.',
+    risk: 'read',
+    examples: [{}],
+    identifierFormats: [],
+    safetyNotes: [
+      'Read-only.',
+      'DataLevel has no effect for third-party applications; TradeLevel controls whether live market-data subscriptions can be used.',
+    ],
+    keywords: ['session', 'capabilities', 'tradelevel', 'datalevel', 'realtime', 'delayed'],
+  },
+  {
+    id: 'saxo_set_session_trade_level',
+    title: 'Set Saxo Session TradeLevel',
+    description:
+      'Set TradeLevel to FullTradingAndChat or OrdersOnly, then poll capabilities until the new state is confirmed.',
+    risk: 'write',
+    examples: [{ tradeLevel: 'FullTradingAndChat' }, { tradeLevel: 'OrdersOnly' }],
+    identifierFormats: ['tradeLevel: FullTradingAndChat|OrdersOnly'],
+    safetyNotes: [
+      'LIVE requires policy.allow_live_session_capability_writes=true.',
+      'Only one session per Saxo user can have FullTradingAndChat. Upgrading this session can downgrade SaxoTraderGO/PRO or other OpenAPI sessions to delayed data.',
+      'The server starts a session-events subscription so silent TradeLevel downgrades can update diagnostics.',
+    ],
+    keywords: ['session', 'capabilities', 'tradelevel', 'fulltradingandchat', 'ordersonly', 'realtime', 'delayed'],
   },
   {
     id: 'saxo_feature_availability',
@@ -232,10 +261,10 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['screen', 'screener', 'gainers', 'losers', 'premarket', 'market movers', 'stocks'],
   },
   {
-    id: 'saxo_plan_option_strategy',
-    title: 'Plan Option Strategy',
+    id: 'saxo_generate_option_strategy_candidates',
+    title: 'Generate Option Strategy Candidates',
     description:
-      'Generate ranked read-only option trade plans for cash-secured puts, long calls, vertical spreads, debit spreads, and iron condors using Saxo option-chain data, Saxo Greeks, optional Saxo IV context, and caller-provided external context.',
+      'Generate read-only option candidates for explicit caller-provided strategies using Saxo option-chain data, Saxo Greeks, optional Saxo IV context, and caller-provided external context.',
     risk: 'read',
     examples: [
       {
@@ -246,28 +275,25 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
         maxCandidates: 5,
       },
     ],
-    identifierFormats: ['AccountKey + keywords', 'AccountKey + OptionRootId'],
+    identifierFormats: ['keywords + strategies[]', 'OptionRootId + strategies[]'],
     safetyNotes: [
-      'Read-only strategy planning. Does not call precheck or place orders.',
-      'Returns precheck draft payloads for separate manual use with guarded order tools.',
-      'Aggregates leg Greeks and penalizes unfavorable theta decay when ranking long-premium structures.',
-      'Not investment advice; outputs are deterministic screens based on available Saxo data.',
+      'Read-only candidate generation. Does not call precheck or place orders.',
+      'Caller must provide strategies explicitly; the server does not choose a playbook.',
+      'Returns factor scores and warnings, not verdicts or confidence labels.',
     ],
     keywords: ['option', 'strategy', 'trade plan', 'cash secured put', 'long call', 'leaps', 'vertical spread', 'iron condor'],
   },
   {
-    id: 'saxo_screen_option_strategies',
-    title: 'Screen Option Strategies',
+    id: 'saxo_screen_option_strategy_factors',
+    title: 'Screen Option Strategy Factors',
     description:
-      'Opinionated read-only screener that finds liquid US stock underlyings, derives Saxo chart-based technical, OptionsChain IV, and Greeks context, checks StockOption availability, runs strategy planning, and ranks option trade-plan candidates across symbols.',
+      'Read-only factor screener that finds stock underlyings, derives Saxo chart, OptionsChain IV, Greeks, optional news, and account sizing context for explicit option strategies.',
     risk: 'read',
     examples: [
       {
         accountKey: 'AccountKey...',
         market: 'us_nasdaq',
         underlyingUniverse: 'auto',
-        playbook: 'income_30_60d',
-        riskProfile: 'balanced',
         strategies: ['put_credit_spread', 'iron_condor'],
         maxUnderlyings: 50,
         maxUnderlyingScan: 500,
@@ -286,10 +312,10 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     safetyNotes: [
       'Read-only screening. Does not call precheck or place orders.',
       'Processes candidates conservatively to reduce Saxo rate-limit risk.',
-      'Use playbook, riskProfile, and objective to make ranking explicit instead of asking for a generic best trade.',
-      'Use underlyingUniverse=auto to let the playbook choose bullish, bearish, or two-sided movers; set underlyingPreset only when you want a specific market-mover list.',
-      'Fetches account balance and positions by default for sizing and decision-brief context; set includeAccountContext=false to opt out.',
-      'Scans a larger Saxo stock universe before ranking underlyings; tune maxUnderlyingScan when you need a faster or broader pass.',
+      'Caller must provide strategies explicitly; the server returns factors, not a generic best trade.',
+      'Use underlyingUniverse=auto for two-sided movers; set underlyingPreset for a specific market-mover list.',
+      'Fetches account balance and positions only when accountKey is supplied and includeAccountContext=true.',
+      'Scans a larger Saxo stock universe before returning underlyings; tune maxUnderlyingScan when you need a faster or broader pass.',
       'Saxo chart data and short-lived OptionsChain subscriptions are the default sources for deterministic TA and IV context.',
       'Saxo Greeks from option quotes are aggregated across legs so theta, delta, gamma, and vega affect strategy scoring and warnings.',
       'Set requireGreeks=true to reject candidates when Saxo does not return complete delta/gamma/theta/vega, and maxThetaDailyPercentOfRisk to cap theta decay.',
@@ -299,10 +325,10 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     keywords: ['option', 'options', 'strategy screener', 'screen strategies', 'trade plan', 'income', 'spreads'],
   },
   {
-    id: 'saxo_screen_stock_strategies',
-    title: 'Screen Stock Strategies',
+    id: 'saxo_screen_stock_factors',
+    title: 'Screen Stock Factors',
     description:
-      'Opinionated read-only stock screener that ranks US stock candidates with Saxo quotes, chart-based technical context, account-aware sizing, optional Alpha Vantage fundamentals/news, and decision briefs.',
+      'Read-only stock factor screener that returns Saxo quotes, chart-based technical context, optional account sizing, optional Alpha Vantage fundamentals/news, and warnings.',
     risk: 'read',
     examples: [
       {
@@ -322,15 +348,15 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
       'Read-only screening. Does not call precheck or place orders.',
       'Saxo does not expose market capitalization through the documented reference/price endpoints used here; set ALPHA_VANTAGE_API_KEY to enrich candidates with OVERVIEW market capitalization and fundamentals.',
       'Without Alpha Vantage, large_cap is treated as a liquid-stock universe proxy and the result includes warnings.',
-      'Fetches Saxo balance and positions by default for position sizing and concentration checks; set includeAccountContext=false to opt out.',
+      'Fetches Saxo balance and positions only when accountKey is supplied and includeAccountContext=true.',
     ],
     keywords: ['stock', 'stocks', 'strategy screener', 'market cap', 'large cap', 'portfolio', 'screen strategies'],
   },
   {
-    id: 'saxo_plan_portfolio_strategy',
-    title: 'Plan Portfolio Strategy',
+    id: 'saxo_analyze_portfolio_context',
+    title: 'Analyze Portfolio Context',
     description:
-      'Read-only whole-account strategy planner that combines account snapshot, stock strategy screening, option strategy screening, target allocation, options thesis sleeves, risk caps, and staged deployment into a single decision package.',
+      'Read-only whole-account context analyzer that combines account snapshot, stock factors, option factors, risk budgets, concentration context, and warnings without allocation/deployment recommendations.',
     risk: 'read',
     examples: [
       {
@@ -367,18 +393,10 @@ export const SAXO_CAPABILITIES: SaxoCapability[] = [
     ],
     identifierFormats: ['AccountKey'],
     safetyNotes: [
-      'Read-only planning. Does not call precheck or place orders.',
-      'Uses staged deployment by default; it may leave cash undeployed when candidates do not fit the risk rules.',
+      'Read-only context analysis. Does not call precheck or place orders.',
       'Stock candidate discovery is controlled with stockUniverse, stockMarket, stockMaxCandidates, and stockMaxTechnicalCandidates.',
-      'Uses guardrailed options sizing by default; explicit optionTheses and optionsMode=user_driven are required for high-conviction concentration.',
-      'Set includeStocks=false for an options-only account; stock allocation targets then stay at zero.',
-      'Set discoverOptionCandidates=true to blend explicit option theses with a deterministic Saxo market/option screener discovery sleeve.',
-      'Set requireGreeks=true for options-only or aggressive accounts so candidates without complete Saxo Greeks are rejected instead of merely warned.',
-      'Selected option candidates include entryTiming so pullbacks can be staged separately from technical breakdowns.',
-      'For options-only immediate plans, contract counts scale up to configured thesis, trade, and cash-reserve budgets; staged plans remain starter-sized.',
-      'Risk dashboard reports cash reserve, deployable cash, unallocated option budget, and warnings when strict filters leave material cash undeployed.',
-      'Use portfolioProfile=concentrated_conviction, maxSelectedUnderlyings, minPositionRiskDollars, and maxContractsPerPosition to avoid many tiny hard-to-monitor option positions.',
-      'Not investment advice; output is decision support based on available Saxo and optional external data.',
+      'Option context uses explicit optionTheses/optionSymbols plus optional deterministic Saxo market discovery.',
+      'Returns risk budgets, factor summaries, constraint context, and warnings; it does not recommend allocations or contract counts.',
     ],
     keywords: ['portfolio', 'allocation', 'strategy', 'whole account', 'cash deployment', 'stocks', 'options', 'leaps', 'thesis'],
   },

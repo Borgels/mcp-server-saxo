@@ -46,6 +46,8 @@ describe('Saxo tool registration', () => {
     expect(ids).toEqual([
       'saxo_capabilities',
       'saxo_session_me',
+      'saxo_get_session_capabilities',
+      'saxo_set_session_trade_level',
       'saxo_diagnostics',
       'saxo_feature_availability',
       'saxo_search_instruments',
@@ -61,10 +63,10 @@ describe('Saxo tool registration', () => {
       'saxo_screen_market',
       'saxo_compute_spread_quote',
       'saxo_estimate_vertical_spread',
-      'saxo_plan_option_strategy',
-      'saxo_screen_option_strategies',
-      'saxo_screen_stock_strategies',
-      'saxo_plan_portfolio_strategy',
+      'saxo_generate_option_strategy_candidates',
+      'saxo_screen_option_strategy_factors',
+      'saxo_screen_stock_factors',
+      'saxo_analyze_portfolio_context',
       'saxo_review_strategy_positions',
       'saxo_list_accounts',
       'saxo_get_balance',
@@ -98,6 +100,7 @@ describe('Saxo tool registration', () => {
     const readOnly = [
       'saxo_capabilities',
       'saxo_session_me',
+      'saxo_get_session_capabilities',
       'saxo_diagnostics',
       'saxo_feature_availability',
       'saxo_search_instruments',
@@ -113,10 +116,10 @@ describe('Saxo tool registration', () => {
       'saxo_screen_market',
       'saxo_compute_spread_quote',
       'saxo_estimate_vertical_spread',
-      'saxo_plan_option_strategy',
-      'saxo_screen_option_strategies',
-      'saxo_screen_stock_strategies',
-      'saxo_plan_portfolio_strategy',
+      'saxo_generate_option_strategy_candidates',
+      'saxo_screen_option_strategy_factors',
+      'saxo_screen_stock_factors',
+      'saxo_analyze_portfolio_context',
       'saxo_review_strategy_positions',
       'saxo_list_accounts',
       'saxo_get_balance',
@@ -150,6 +153,7 @@ describe('Saxo tool registration', () => {
       'saxo_update_price_alert',
       'saxo_delete_price_alerts',
       'saxo_update_price_alert_user_settings',
+      'saxo_set_session_trade_level',
       'saxo_oauth_login',
       'saxo_oauth_start',
       'saxo_oauth_complete',
@@ -250,6 +254,27 @@ describe('Saxo tool registration', () => {
         Operator: 'GreaterOrEqual',
       }),
     ).rejects.toThrow(/SAXO_ENABLE_LIVE_ALERT_WRITES/);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('saxo_set_session_trade_level on LIVE throws before any fetch when policy disallows it', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}'));
+    const client = new SaxoClient({
+      environment: 'live',
+      accessToken: 'token',
+      fetchImpl: fetchMock as unknown as typeof fetch,
+    });
+    const registered = captureRegisteredTools(client);
+
+    const tool = registered.saxo_set_session_trade_level;
+    if (!tool) throw new Error('saxo_set_session_trade_level not registered');
+
+    await expect(
+      tool.handler({
+        tradeLevel: 'FullTradingAndChat',
+      }),
+    ).rejects.toThrow(/allow_live_session_capability_writes=false/);
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

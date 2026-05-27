@@ -1,10 +1,8 @@
 import type {
   AccountScreeningContext,
-  DecisionConfidence,
-  DecisionVerdict,
   ScreenOptionStrategiesResult,
 } from './option-strategy-screener.js';
-import type { OptionStrategyKind } from './options.js';
+import { optionPlanSortScore, type OptionStrategyKind } from './options.js';
 
 export type OptionsMode = 'guardrailed' | 'user_driven';
 export type OptionThesisRole = 'core_conviction' | 'tactical_momentum' | 'income' | 'hedge' | 'speculative';
@@ -64,8 +62,6 @@ export interface OptionPortfolioSelectedCandidate {
   symbol: string;
   role: OptionThesisRole;
   strategy: string;
-  verdict: DecisionVerdict;
-  confidence: DecisionConfidence;
   recommendedContracts: number;
   plannedRisk?: number;
   maxProfit?: number;
@@ -289,15 +285,12 @@ export function buildOptionPortfolioPlan(input: BuildOptionPortfolioPlanInput): 
       thesisRiskUsed[thesis.name] = (thesisRiskUsed[thesis.name] ?? 0) + plannedRisk;
       selectedSymbols.add(plan.symbol);
       selectedUnderlyings.add(plan.symbol);
-      const brief = input.optionScreen?.decisionBriefs.find(item => item.rank === plan.rank && item.symbol === plan.symbol);
       selected.push({
         rank: selected.length + 1,
         thesisName: thesis.name,
         symbol: plan.symbol,
         role: thesis.role,
         strategy: plan.strategy,
-        verdict: brief?.verdict ?? 'watchlist',
-        confidence: brief?.confidence ?? 'low',
         recommendedContracts,
         plannedRisk: roundMoney(plannedRisk),
         maxProfit: roundMoney(plan.maxProfit === undefined ? undefined : plan.maxProfit * recommendedContracts),
@@ -454,7 +447,7 @@ function plansForThesis(plans: OptionPlan[], thesis: ReturnType<typeof normalize
     .filter(plan => symbols.has(plan.symbol))
     .filter(plan => preferred.size === 0 || preferred.has(plan.strategy))
     .filter(plan => horizonMatches(plan, thesis.horizon))
-    .sort((a, b) => (b.rankingBreakdown?.finalScore ?? b.score.total) - (a.rankingBreakdown?.finalScore ?? a.score.total));
+    .sort((a, b) => optionPlanSortScore(b) - optionPlanSortScore(a));
 }
 
 function isGeneratedStructure(structure: OptionPortfolioStructure): structure is OptionStrategyKind {
@@ -549,7 +542,7 @@ function scaleGreek(value: number | undefined, contracts: number): number | unde
 }
 
 function explainSelection(plan: OptionPlan, thesis: ReturnType<typeof normalizeTheses>[number]): string {
-  const score = plan.rankingBreakdown?.finalScore ?? plan.score.total;
+  const score = optionPlanSortScore(plan);
   const theta = plan.greeks?.theta !== undefined
     ? ` Net theta ${plan.greeks.theta}/day (${plan.greeks.thetaDailyPercentOfRisk ?? 'unknown'}% of max risk).`
     : ' Greeks unavailable.';

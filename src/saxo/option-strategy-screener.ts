@@ -5,6 +5,7 @@ import {
   type OptionStrategyKind,
   type OptionStrategyPlan,
   type DirectionalBias,
+  optionPlanSortScore,
   planOptionStrategy,
 } from './options.js';
 import {
@@ -16,14 +17,11 @@ import { getBalance, listAccounts, listPositions } from './portfolio.js';
 import { type MarketScreenMarket, type MarketScreenPreset, screenMarket } from './screener.js';
 
 export interface ScreenOptionStrategiesInput {
-  accountKey: string;
+  accountKey?: string;
   market?: Extract<MarketScreenMarket, 'us' | 'us_nasdaq' | 'us_nyse'>;
   symbols?: string[];
   underlyingUniverse?: UnderlyingUniverse;
   underlyingPreset?: MarketScreenPreset;
-  playbook?: StrategyPlaybook;
-  riskProfile?: RiskProfile;
-  objective?: TradeObjective;
   strategies?: OptionStrategyKind[];
   minDte?: number;
   maxDte?: number;
@@ -92,9 +90,7 @@ export interface ScreenedUnderlying {
   skipReason?: string;
 }
 
-export type SizingVerdict = 'pass' | 'watchlist' | 'too_large' | 'blocked' | 'unknown';
-export type DecisionVerdict = 'pass' | 'watchlist' | 'reject';
-export type DecisionConfidence = 'low' | 'medium' | 'high';
+export type SizingStatus = 'fits' | 'limited' | 'over_budget' | 'blocked_by_constraint' | 'unknown';
 
 export interface AccountScreeningContext {
   source: 'saxo_portfolio';
@@ -117,32 +113,16 @@ export interface PositionSizing {
   symbolExposureBefore?: number;
   symbolExposureAfterTrade?: number;
   symbolExposureAfterTradePercent?: number;
-  sizingVerdict: SizingVerdict;
+  sizingStatus: SizingStatus;
   sizingNotes: string[];
 }
 
-export interface RankingBreakdown {
+export interface OptionFactorScores {
   baseScore: number;
   liquidityScore: number;
   structureScore: number;
   contextScore: number;
-  playbookFitScore: number;
   accountFitScore: number;
-  finalScore: number;
-}
-
-export interface DecisionBrief {
-  rank: number;
-  symbol: string;
-  verdict: DecisionVerdict;
-  confidence: DecisionConfidence;
-  oneLine: string;
-  tradeSummary: string;
-  whyItRanked: string[];
-  keyRisks: string[];
-  decisionRules: string[];
-  questionsBeforeTrade: string[];
-  accountFit?: PositionSizing;
 }
 
 type MarketUnderlyingRow = {
@@ -162,10 +142,6 @@ export interface ScreenOptionStrategiesResult {
     underlyingUniverse: UnderlyingUniverse;
     underlyingPreset: MarketScreenPreset;
     underlyingPresets: MarketScreenPreset[];
-    playbook: StrategyPlaybook;
-    riskProfile: RiskProfile;
-    objective: TradeObjective;
-    playbookNotes: string[];
     strategies: OptionStrategyKind[];
     minDte: number;
     maxDte: number;
@@ -204,7 +180,6 @@ export interface ScreenOptionStrategiesResult {
   warnings: string[];
   underlyings: ScreenedUnderlying[];
   accountContext?: AccountScreeningContext;
-  decisionBriefs: DecisionBrief[];
   Data: Array<
     OptionStrategyPlan & {
       symbol: string;
@@ -218,8 +193,8 @@ export interface ScreenOptionStrategiesResult {
       newsContext?: MarketNewsContext;
       effectiveContext?: ExternalStrategyContext;
       positionSizing?: PositionSizing;
-      rankingBreakdown?: RankingBreakdown;
-      whyItRanked?: string[];
+      factorScores?: OptionFactorScores;
+      factorSummary?: string[];
       keyRisks?: string[];
     }
   >;
@@ -329,16 +304,15 @@ export async function screenOptionStrategies(
   now: Date = new Date(),
 ): Promise<ScreenOptionStrategiesResult> {
   const market = input.market ?? 'us';
-  const playbook = input.playbook ?? 'income_30_60d';
-  const playbookDefaults = PLAYBOOK_DEFAULTS[playbook];
   const underlyingUniverse = input.underlyingUniverse ?? (input.underlyingPreset ? 'single_preset' : 'auto');
-  const underlyingPresets = resolveUnderlyingPresets(underlyingUniverse, playbook, input.underlyingPreset);
+  const underlyingPresets = resolveUnderlyingPresets(underlyingUniverse, input.underlyingPreset);
   const underlyingPreset = input.underlyingPreset ?? underlyingPresets[0] ?? 'top_gainers';
-  const riskProfile = input.riskProfile ?? 'balanced';
-  const objective = input.objective ?? playbookDefaults.objective;
-  const strategies = input.strategies?.length ? input.strategies : playbookDefaults.strategies;
-  const minDte = input.minDte ?? playbookDefaults.minDte;
-  const maxDte = input.maxDte ?? playbookDefaults.maxDte;
+  const warnings: string[] = [];
+  const strategies: OptionStrategyKind[] = input.strategies?.length
+    ? input.strategies
+    : ['put_credit_spread', 'call_credit_spread', 'debit_spread'];
+  const minDte = input.minDte ?? 14;
+  const maxDte = input.maxDte ?? 60;
   const maxUnderlyings = clampInt(input.maxUnderlyings ?? 50, 1, 50);
   const maxUnderlyingScan = clampInt(input.maxUnderlyingScan ?? 500, maxUnderlyings, 500);
   const maxSymbolsToPlan = clampInt(input.maxSymbolsToPlan ?? 5, 1, 10);
@@ -352,8 +326,8 @@ export async function screenOptionStrategies(
   const maxPortfolioRiskPercent = clampNumber(input.maxPortfolioRiskPercent ?? 5, 0.01, 100);
   const maxSymbolExposurePercent = clampNumber(input.maxSymbolExposurePercent ?? 10, 0.01, 100);
   const allowExistingExposureIncrease = input.allowExistingExposureIncrease ?? false;
-  const minOpenInterest = input.minOpenInterest ?? riskAdjustedOpenInterest(playbookDefaults.minOpenInterest, riskProfile);
-  const maxSpreadPercent = input.maxSpreadPercent ?? riskAdjustedSpread(playbookDefaults.maxSpreadPercent, riskProfile);
+  const minOpenInterest = input.minOpenInterest ?? 1;
+  const maxSpreadPercent = input.maxSpreadPercent ?? 35;
   const includeTechnicalContext = input.includeTechnicalContext ?? true;
   const includeVolatilityContext = input.includeVolatilityContext ?? true;
   const includeNewsContext = input.includeNewsContext ?? false;
@@ -363,8 +337,10 @@ export async function screenOptionStrategies(
   const earningsHorizon = input.earningsHorizon ?? '3month';
   const technicalHorizon = clampInt(input.technicalHorizon ?? 1440, 1, 10080);
   const technicalBars = clampInt(input.technicalBars ?? 90, 20, 1200);
-  const warnings: string[] = [];
-  const accountContext = includeAccountContext
+  if (includeAccountContext && !input.accountKey) {
+    warnings.push('Account context skipped because accountKey was not supplied.');
+  }
+  const accountContext = includeAccountContext && input.accountKey
     ? await buildAccountContext(client, {
       accountKey: input.accountKey,
       warnings,
@@ -479,24 +455,19 @@ export async function screenOptionStrategies(
     allowExistingExposureIncrease,
     maxPortfolioRiskPercent,
     maxSymbolExposurePercent,
-    objective,
-    playbook,
     riskBudget: input.riskBudget,
     riskBudgetPercent,
-    riskProfile,
   }));
   const ranked = applyDiversifiedRanking(
     enrichedPlans,
-    { objective, playbook, riskProfile },
     maxPlans,
   ).map((plan, index) => ({
     ...plan,
     rank: index + 1,
   }));
-  const decisionBriefs = ranked.map(plan => buildDecisionBrief(plan));
 
   if (ranked.length === 0) {
-    warnings.push('No option strategy plans passed the screening filters.');
+    warnings.push('No option strategy candidates matched the screening filters.');
   }
 
   return {
@@ -506,10 +477,6 @@ export async function screenOptionStrategies(
       underlyingUniverse,
       underlyingPreset,
       underlyingPresets,
-      playbook,
-      riskProfile,
-      objective,
-      playbookNotes: playbookDefaults.notes,
       strategies,
       minDte,
       maxDte,
@@ -548,7 +515,6 @@ export async function screenOptionStrategies(
     warnings,
     underlyings,
     accountContext,
-    decisionBriefs,
     Data: ranked,
   };
 }
@@ -613,7 +579,6 @@ async function resolveCandidateUnderlyings(
 
 function resolveUnderlyingPresets(
   universe: UnderlyingUniverse,
-  playbook: StrategyPlaybook,
   explicitPreset: MarketScreenPreset | undefined,
 ): MarketScreenPreset[] {
   if (explicitPreset && universe === 'single_preset') {
@@ -631,21 +596,7 @@ function resolveUnderlyingPresets(
   if (universe === 'single_preset') {
     return [explicitPreset ?? 'top_gainers'];
   }
-  return defaultUniverseForPlaybook(playbook) === 'bearish_movers'
-    ? ['top_losers']
-    : defaultUniverseForPlaybook(playbook) === 'bullish_movers'
-      ? ['top_gainers']
-      : ['top_gainers', 'top_losers'];
-}
-
-function defaultUniverseForPlaybook(playbook: StrategyPlaybook): Exclude<UnderlyingUniverse, 'auto' | 'single_preset'> {
-  if (playbook === 'long_term_directional' || playbook === 'leaps_replacement') {
-    return 'bullish_movers';
-  }
-  if (playbook === 'quality_put_write') {
-    return 'bearish_movers';
-  }
-  return 'two_sided_movers';
+  return ['top_gainers', 'top_losers'];
 }
 
 function dedupeUnderlyingRows<T extends MarketUnderlyingRow>(rows: T[]): T[] {
@@ -680,7 +631,7 @@ function rankUnderlyingRows<T extends { percentChange: number }>(
 async function resolveExplicitUnderlying(
   client: SaxoClient,
   symbol: string,
-  accountKey: string,
+  accountKey: string | undefined,
   rank: number,
 ): Promise<ScreenedUnderlying> {
   const keyword = symbolKeyword(symbol);
@@ -747,7 +698,7 @@ async function buildTechnicalContext(
   client: SaxoClient,
   underlying: ScreenedUnderlying,
   options: {
-    accountKey: string;
+    accountKey?: string;
     horizon: number;
     bars: number;
     now: Date;
@@ -1109,14 +1060,9 @@ function round(value: number | undefined): number | undefined {
 
 function applyDiversifiedRanking(
   plans: ScreenOptionStrategiesResult['Data'],
-  ranking: {
-    objective: TradeObjective;
-    playbook: StrategyPlaybook;
-    riskProfile: RiskProfile;
-  },
   maxPlans: number,
 ): ScreenOptionStrategiesResult['Data'] {
-  const sorted = [...plans].sort((a, b) => comparePlans(a, b, ranking));
+  const sorted = [...plans].sort(comparePlans);
   const selected: ScreenOptionStrategiesResult['Data'] = [];
   const perSymbol = new Map<string, number>();
   for (const plan of sorted) {
@@ -1145,86 +1091,17 @@ function applyDiversifiedRanking(
 function comparePlans(
   a: ScreenOptionStrategiesResult['Data'][number],
   b: ScreenOptionStrategiesResult['Data'][number],
-  ranking: {
-    objective: TradeObjective;
-    playbook: StrategyPlaybook;
-    riskProfile: RiskProfile;
-  },
 ): number {
   return (
-    (b.rankingBreakdown?.finalScore ?? rankedScore(b, ranking)) -
-      (a.rankingBreakdown?.finalScore ?? rankedScore(a, ranking)) ||
+    neutralPlanScore(b) - neutralPlanScore(a) ||
     Number(Boolean(b.pricing)) - Number(Boolean(a.pricing)) ||
     (b.score.liquidity - a.score.liquidity) ||
     a.symbol.localeCompare(b.symbol)
   );
 }
 
-function rankedScore(
-  plan: ScreenOptionStrategiesResult['Data'][number],
-  ranking: {
-    objective: TradeObjective;
-    playbook: StrategyPlaybook;
-    riskProfile: RiskProfile;
-  },
-): number {
-  const fit = playbookFitScore(plan, ranking);
-  return plan.score.total * 0.7 + fit * 0.3;
-}
-
-function playbookFitScore(
-  plan: ScreenOptionStrategiesResult['Data'][number],
-  ranking: {
-    objective: TradeObjective;
-    playbook: StrategyPlaybook;
-    riskProfile: RiskProfile;
-  },
-): number {
-  const defaults = PLAYBOOK_DEFAULTS[ranking.playbook];
-  const strategyFit = defaults.strategies.includes(plan.strategy) ? 100 : 35;
-  const dteFit = scaleDownLocal(Math.abs(plan.daysToExpiry - midpointLocal(defaults.minDte, defaults.maxDte)), 0, Math.max(7, (defaults.maxDte - defaults.minDte) / 2));
-  const objectiveFit = objectiveScore(plan, ranking.objective);
-  const riskFit = riskProfileScore(plan, ranking.riskProfile);
-  return clampScore(strategyFit * 0.25 + dteFit * 0.25 + objectiveFit * 0.3 + riskFit * 0.2);
-}
-
-function objectiveScore(plan: ScreenOptionStrategiesResult['Data'][number], objective: TradeObjective): number {
-  if (objective === 'income') {
-    return plan.estimatedCredit !== undefined
-      ? (plan.strategy === 'iron_condor' || plan.strategy === 'put_credit_spread' ? 95 : 75)
-      : 35;
-  }
-  if (objective === 'directional') {
-    return plan.strategy === 'debit_spread' || plan.strategy === 'long_call' ? 95 : 55;
-  }
-  if (objective === 'volatility') {
-    return plan.strategy === 'iron_condor' || plan.strategy.endsWith('credit_spread') ? 90 : 55;
-  }
-  if (objective === 'stock_replacement') {
-    return (plan.strategy === 'debit_spread' || plan.strategy === 'long_call') && plan.daysToExpiry >= 120
-      ? 95
-      : plan.strategy === 'debit_spread' || plan.strategy === 'long_call'
-        ? 70
-        : 30;
-  }
-  return plan.maxLoss !== undefined && plan.maxLoss <= 1_000 ? 90 : 55;
-}
-
-function riskProfileScore(plan: ScreenOptionStrategiesResult['Data'][number], riskProfile: RiskProfile): number {
-  const maxLoss = plan.maxLoss ?? 10_000;
-  const rewardToRisk = plan.maxProfit && plan.maxLoss && plan.maxLoss > 0 ? plan.maxProfit / plan.maxLoss : 0;
-  if (riskProfile === 'conservative') {
-    const lossScore = scaleDownLocal(maxLoss, 250, 2_500);
-    const definedRiskScore = plan.legs.length > 1 || plan.strategy === 'cash_secured_put' ? 85 : 40;
-    return clampScore(lossScore * 0.65 + definedRiskScore * 0.35);
-  }
-  if (riskProfile === 'aggressive') {
-    if (plan.strategy === 'long_call') {
-      return clampScore(scaleUpLocal(maxLoss, 250, 3_000) * 0.55 + scaleUpLocal(plan.daysToExpiry, 90, 540) * 0.45);
-    }
-    return clampScore(scaleUpLocal(rewardToRisk, 0.2, 2) * 0.6 + scaleUpLocal(maxLoss, 250, 3_000) * 0.4);
-  }
-  return clampScore(scaleUpLocal(rewardToRisk, 0.15, 0.8) * 0.5 + scaleDownLocal(maxLoss, 500, 4_000) * 0.5);
+function neutralPlanScore(plan: ScreenOptionStrategiesResult['Data'][number]): number {
+  return optionPlanSortScore(plan) * 0.85 + scoreAccountFit(plan.positionSizing) * 0.15;
 }
 
 function contextForSymbol(
@@ -1359,37 +1236,27 @@ function enrichPlanDecisionSupport(
     allowExistingExposureIncrease: boolean;
     maxPortfolioRiskPercent: number;
     maxSymbolExposurePercent: number;
-    objective: TradeObjective;
-    playbook: StrategyPlaybook;
     riskBudget?: number;
     riskBudgetPercent: number;
-    riskProfile: RiskProfile;
   },
 ): ScreenOptionStrategiesResult['Data'][number] {
   const positionSizing = buildPositionSizing(plan, options);
-  const playbookFitScore = playbookFitScoreForPlan(plan, {
-    objective: options.objective,
-    playbook: options.playbook,
-    riskProfile: options.riskProfile,
-  });
   const accountFitScore = scoreAccountFit(positionSizing);
-  const rankingBreakdown: RankingBreakdown = {
-    baseScore: plan.score.total,
+  const factorScores: OptionFactorScores = {
+    baseScore: optionPlanSortScore(plan),
     liquidityScore: plan.score.liquidity,
     structureScore: plan.score.structure,
     contextScore: plan.score.context,
-    playbookFitScore,
     accountFitScore,
-    finalScore: clampScore(plan.score.total * 0.6 + playbookFitScore * 0.25 + accountFitScore * 0.15),
   };
-  const whyItRanked = explainPlanRanking(plan, rankingBreakdown, positionSizing, options.playbook, options.objective);
-  const keyRisks = collectDecisionRisks(plan, positionSizing);
+  const factorSummary = explainPlanFactors(plan, factorScores, positionSizing);
+  const keyRisks = collectFactorRisks(plan, positionSizing);
 
   return {
     ...plan,
     positionSizing,
-    rankingBreakdown,
-    whyItRanked,
+    factorScores,
+    factorSummary,
     keyRisks,
   };
 }
@@ -1426,20 +1293,20 @@ function buildPositionSizing(
     ? collateralRequired / collateralBase * 100
     : undefined;
 
-  let sizingVerdict: SizingVerdict = 'unknown';
+  let sizingStatus: SizingStatus = 'unknown';
   if (maxRiskBudget === undefined || riskPerContract === undefined || maxContracts === undefined) {
     notes.push('Account sizing is limited because account value or per-contract risk could not be derived.');
   } else if (maxContracts < 1) {
-    sizingVerdict = 'too_large';
+    sizingStatus = 'over_budget';
     notes.push(`Risk per contract ${formatMoney(riskPerContract)} exceeds max risk budget ${formatMoney(maxRiskBudget)}.`);
   } else {
-    sizingVerdict = 'pass';
+    sizingStatus = 'fits';
     notes.push(`Up to ${maxContracts} contract(s) fit the configured risk budget.`);
   }
 
   if (maxPortfolioRisk !== undefined && riskPerContract !== undefined && riskPerContract > maxPortfolioRisk) {
-    if (sizingVerdict !== 'too_large') {
-      sizingVerdict = 'watchlist';
+    if (sizingStatus !== 'over_budget') {
+      sizingStatus = 'limited';
     }
     notes.push(`Single-contract risk exceeds max portfolio risk setting ${formatMoney(maxPortfolioRisk)}.`);
   }
@@ -1448,7 +1315,7 @@ function buildPositionSizing(
     symbolExposureAfterTradePercent !== undefined &&
     symbolExposureAfterTradePercent > options.maxSymbolExposurePercent
   ) {
-    sizingVerdict = options.allowExistingExposureIncrease ? 'watchlist' : 'blocked';
+    sizingStatus = options.allowExistingExposureIncrease ? 'limited' : 'blocked_by_constraint';
     notes.push(`Estimated symbol exposure would be ${round(symbolExposureAfterTradePercent)}%, above ${options.maxSymbolExposurePercent}%.`);
   }
 
@@ -1458,7 +1325,7 @@ function buildPositionSizing(
     collateralBase !== undefined &&
     collateralRequired > collateralBase
   ) {
-    sizingVerdict = 'blocked';
+    sizingStatus = 'blocked_by_constraint';
     notes.push(`Cash-secured collateral ${formatMoney(collateralRequired)} exceeds available cash/margin ${formatMoney(collateralBase)}.`);
   }
 
@@ -1472,77 +1339,19 @@ function buildPositionSizing(
     symbolExposureBefore: roundMoneyLocal(symbolExposureBefore),
     symbolExposureAfterTrade: roundMoneyLocal(symbolExposureAfterTrade),
     symbolExposureAfterTradePercent: round(symbolExposureAfterTradePercent),
-    sizingVerdict,
+    sizingStatus,
     sizingNotes: notes,
   };
 }
 
-function buildDecisionBrief(plan: ScreenOptionStrategiesResult['Data'][number]): DecisionBrief {
-  const verdict = decisionVerdict(plan);
-  const confidence = decisionConfidence(plan);
-  return {
-    rank: plan.rank,
-    symbol: plan.symbol,
-    verdict,
-    confidence,
-    oneLine: oneLineDecision(plan, verdict),
-    tradeSummary: tradeSummary(plan),
-    whyItRanked: plan.whyItRanked ?? [],
-    keyRisks: plan.keyRisks ?? [],
-    decisionRules: decisionRules(plan),
-    questionsBeforeTrade: questionsBeforeTrade(plan),
-    accountFit: plan.positionSizing,
-  };
-}
-
-function decisionVerdict(plan: ScreenOptionStrategiesResult['Data'][number]): DecisionVerdict {
-  if (plan.positionSizing?.sizingVerdict === 'blocked' || plan.positionSizing?.sizingVerdict === 'too_large') {
-    return 'reject';
-  }
-  if ((plan.rankingBreakdown?.finalScore ?? plan.score.total) >= 80 && plan.warnings.length === 0) {
-    return 'pass';
-  }
-  return 'watchlist';
-}
-
-function decisionConfidence(plan: ScreenOptionStrategiesResult['Data'][number]): DecisionConfidence {
-  const score = plan.rankingBreakdown?.finalScore ?? plan.score.total;
-  if (score >= 80 && plan.pricing && plan.positionSizing?.sizingVerdict === 'pass') {
-    return 'high';
-  }
-  if (score >= 60 && plan.positionSizing?.sizingVerdict !== 'unknown') {
-    return 'medium';
-  }
-  return 'low';
-}
-
-function oneLineDecision(plan: ScreenOptionStrategiesResult['Data'][number], verdict: DecisionVerdict): string {
-  if (verdict === 'reject') {
-    return `${plan.symbol} ${labelStrategy(plan.strategy)} is not account-fit under the current sizing constraints.`;
-  }
-  return `${plan.symbol} ${labelStrategy(plan.strategy)} fits the ${plan.daysToExpiry} DTE window with ${plan.positionSizing?.sizingVerdict ?? 'unknown'} account sizing.`;
-}
-
-function tradeSummary(plan: ScreenOptionStrategiesResult['Data'][number]): string {
-  const price = plan.estimatedCredit !== undefined
-    ? `credit ${formatMoney(plan.estimatedCredit * plan.contractSize)}`
-    : plan.estimatedDebit !== undefined
-      ? `debit ${formatMoney(plan.estimatedDebit * plan.contractSize)}`
-      : 'price unavailable';
-  return `${labelStrategy(plan.strategy)} expiring ${plan.expiry} (${plan.daysToExpiry} DTE), ${price}, max loss ${formatMoney(plan.maxLoss)}.`;
-}
-
-function explainPlanRanking(
+function explainPlanFactors(
   plan: ScreenOptionStrategiesResult['Data'][number],
-  ranking: RankingBreakdown,
+  factors: OptionFactorScores,
   sizing: PositionSizing,
-  playbook: StrategyPlaybook,
-  objective: TradeObjective,
 ): string[] {
   const reasons = [
-    `Final score ${ranking.finalScore}: base ${ranking.baseScore}, playbook fit ${ranking.playbookFitScore}, account fit ${ranking.accountFitScore}.`,
-    `${labelStrategy(plan.strategy)} matches ${playbook} / ${objective} with ${plan.daysToExpiry} DTE.`,
-    `Liquidity ${ranking.liquidityScore}, structure ${ranking.structureScore}, context ${ranking.contextScore}.`,
+    `${labelStrategy(plan.strategy)} candidate with ${plan.daysToExpiry} DTE.`,
+    `Factor scores: liquidity ${factors.liquidityScore}, structure ${factors.structureScore}, context ${factors.contextScore}, account fit ${factors.accountFitScore}.`,
   ];
   if (plan.effectiveContext?.volatility?.summary) {
     reasons.push(plan.effectiveContext.volatility.summary);
@@ -1550,20 +1359,20 @@ function explainPlanRanking(
   if (plan.screeningContext?.summary) {
     reasons.push(plan.screeningContext.summary);
   }
-  if (sizing.sizingVerdict !== 'unknown') {
-    reasons.push(`Account sizing verdict: ${sizing.sizingVerdict}.`);
+  if (sizing.sizingStatus !== 'unknown') {
+    reasons.push(`Account sizing status: ${sizing.sizingStatus}.`);
   }
   return reasons;
 }
 
-function collectDecisionRisks(
+function collectFactorRisks(
   plan: ScreenOptionStrategiesResult['Data'][number],
   sizing: PositionSizing,
 ): string[] {
   return Array.from(new Set([
     ...plan.warnings,
     ...(plan.effectiveContext?.riskNotes ?? []),
-    ...sizing.sizingNotes.filter(note => sizing.sizingVerdict !== 'pass' || /exceeds|above|limited/i.test(note)),
+    ...sizing.sizingNotes.filter(note => sizing.sizingStatus !== 'fits' || /exceeds|above|limited/i.test(note)),
     plan.maxLoss && plan.maxProfit && plan.maxLoss > plan.maxProfit * 4
       ? 'Max loss is more than 4x max profit; size conservatively.'
       : undefined,
@@ -1571,56 +1380,12 @@ function collectDecisionRisks(
   ].filter((item): item is string => Boolean(item))));
 }
 
-function decisionRules(plan: ScreenOptionStrategiesResult['Data'][number]): string[] {
-  const rules = [
-    plan.estimatedCredit !== undefined
-      ? `Only consider if fill is at ${formatMoney(plan.estimatedCredit * plan.contractSize)} credit or better per contract.`
-      : plan.estimatedDebit !== undefined
-        ? `Only consider if fill is at ${formatMoney(plan.estimatedDebit * plan.contractSize)} debit or better per contract.`
-        : 'Do not consider without a live executable quote.',
-    plan.positionSizing?.maxContracts !== undefined
-      ? `Do not exceed ${plan.positionSizing.maxContracts} contract(s) under the configured risk budget.`
-      : 'Set an explicit risk budget before sizing.',
-  ];
-  if (plan.estimatedCredit !== undefined) {
-    rules.push('For short-premium structures, consider taking profit around 40-60% of max credit.');
-  }
-  if (plan.breakevens.length) {
-    rules.push(`Reassess if underlying moves through breakeven ${plan.breakevens.map(value => String(value)).join(' / ')}.`);
-  }
-  return rules;
-}
-
-function questionsBeforeTrade(plan: ScreenOptionStrategiesResult['Data'][number]): string[] {
-  const questions = [
-    'Is there an earnings, dividend, or news catalyst before expiry?',
-    'Is the live bid/ask still inside the screened spread threshold?',
-  ];
-  if (plan.strategy === 'cash_secured_put') {
-    questions.push('Are you willing to own the underlying at the breakeven price?');
-  }
-  if (plan.daysToExpiry <= 14) {
-    questions.push('Is the short-dated gamma risk acceptable for this account?');
-  }
-  return questions;
-}
-
-function playbookFitScoreForPlan(
-  plan: ScreenOptionStrategiesResult['Data'][number],
-  ranking: {
-    objective: TradeObjective;
-    playbook: StrategyPlaybook;
-    riskProfile: RiskProfile;
-  },
-): number {
-  return playbookFitScore(plan, ranking);
-}
-
-function scoreAccountFit(sizing: PositionSizing): number {
-  if (sizing.sizingVerdict === 'pass') return 90;
-  if (sizing.sizingVerdict === 'watchlist') return 60;
-  if (sizing.sizingVerdict === 'too_large') return 20;
-  if (sizing.sizingVerdict === 'blocked') return 0;
+function scoreAccountFit(sizing: PositionSizing | undefined): number {
+  if (!sizing) return 45;
+  if (sizing.sizingStatus === 'fits') return 90;
+  if (sizing.sizingStatus === 'limited') return 60;
+  if (sizing.sizingStatus === 'over_budget') return 20;
+  if (sizing.sizingStatus === 'blocked_by_constraint') return 0;
   return 45;
 }
 

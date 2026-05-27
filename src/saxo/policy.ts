@@ -6,6 +6,7 @@ import type { SaxoEnvironment } from './environment.js';
 const READ_ONLY_TOOLS = new Set([
   'saxo_capabilities',
   'saxo_session_me',
+  'saxo_get_session_capabilities',
   'saxo_diagnostics',
   'saxo_search_instruments',
   'saxo_get_instrument_details',
@@ -21,10 +22,10 @@ const READ_ONLY_TOOLS = new Set([
   'saxo_screen_market',
   'saxo_compute_spread_quote',
   'saxo_estimate_vertical_spread',
-  'saxo_plan_option_strategy',
-  'saxo_screen_option_strategies',
-  'saxo_screen_stock_strategies',
-  'saxo_plan_portfolio_strategy',
+  'saxo_generate_option_strategy_candidates',
+  'saxo_screen_option_strategy_factors',
+  'saxo_screen_stock_factors',
+  'saxo_analyze_portfolio_context',
   'saxo_review_strategy_positions',
   'saxo_list_accounts',
   'saxo_get_balance',
@@ -57,6 +58,10 @@ const ALERT_WRITE_TOOLS = new Set([
   'saxo_update_price_alert_user_settings',
 ]);
 
+const SESSION_CAPABILITY_WRITE_TOOLS = new Set([
+  'saxo_set_session_trade_level',
+]);
+
 const OAUTH_TOOLS = new Set([
   'saxo_oauth_login',
   'saxo_oauth_start',
@@ -67,6 +72,7 @@ const OAUTH_TOOLS = new Set([
 export interface SaxoPolicy {
   allow_live_writes: boolean;
   allow_live_alert_writes?: boolean;
+  allow_live_session_capability_writes?: boolean;
   require_precheck_on_live: boolean;
   allow_short_option_legs?: boolean;
   allowed_asset_types?: string[];
@@ -172,6 +178,21 @@ export function checkToolAllowed(context: ToolPolicyContext): PolicyDecision {
     }
 
     return { allowed: true, reason: 'price alert write tool authorised for environment' };
+  }
+
+  if (SESSION_CAPABILITY_WRITE_TOOLS.has(tool)) {
+    if (environment === 'live') {
+      const policy = context.policy ?? DEFAULT_POLICY;
+      if (!policy.allow_live_session_capability_writes) {
+        return {
+          allowed: false,
+          reason:
+            'policy.json does not allow live session capability writes (allow_live_session_capability_writes=false).',
+        };
+      }
+    }
+
+    return { allowed: true, reason: 'session capability write tool authorised for environment' };
   }
 
   if (!WRITE_TOOLS.has(tool)) {

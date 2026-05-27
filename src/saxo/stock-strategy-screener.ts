@@ -11,11 +11,9 @@ import { getBalance, listAccounts, listPositions } from './portfolio.js';
 import { MARKET_PRESET_EXCHANGES, type MarketScreenMarket } from './screener.js';
 import type {
   AccountScreeningContext,
-  DecisionConfidence,
-  DecisionVerdict,
   PositionSizing,
   RiskProfile,
-  SizingVerdict,
+  SizingStatus,
 } from './option-strategy-screener.js';
 
 export type StockStrategyObjective =
@@ -28,7 +26,7 @@ export type StockStrategyObjective =
 export type StockUniverse = 'auto' | 'large_cap' | 'movers' | 'watchlist' | 'symbols';
 
 export interface ScreenStockStrategiesInput {
-  accountKey: string;
+  accountKey?: string;
   market?: Extract<MarketScreenMarket, 'us' | 'us_nasdaq' | 'us_nyse'>;
   symbols?: string[];
   excludeSymbols?: string[];
@@ -83,28 +81,13 @@ export interface StockTechnicalContext {
   };
 }
 
-export interface StockRankingBreakdown {
+export interface StockFactorScores {
   liquidityScore: number;
   trendScore: number;
   volatilityScore: number;
   contextScore: number;
   objectiveFitScore: number;
   accountFitScore: number;
-  finalScore: number;
-}
-
-export interface StockDecisionBrief {
-  rank: number;
-  symbol: string;
-  verdict: DecisionVerdict;
-  confidence: DecisionConfidence;
-  oneLine: string;
-  tradeSummary: string;
-  whyItRanked: string[];
-  keyRisks: string[];
-  decisionRules: string[];
-  questionsBeforeTrade: string[];
-  accountFit?: PositionSizing;
 }
 
 export interface StockStrategyCandidate {
@@ -128,8 +111,8 @@ export interface StockStrategyCandidate {
   fundamentalsContext?: MarketFundamentalsContext;
   externalContext?: StockExternalContext;
   positionSizing?: PositionSizing;
-  rankingBreakdown: StockRankingBreakdown;
-  whyItRanked: string[];
+  factorScores: StockFactorScores;
+  factorSummary: string[];
   keyRisks: string[];
 }
 
@@ -165,8 +148,7 @@ export interface ScreenStockStrategiesResult {
   };
   warnings: string[];
   accountContext?: AccountScreeningContext;
-  decisionBriefs: StockDecisionBrief[];
-  blockedOrDeferredIdeas: StockStrategyCandidate[];
+  constraintLimitedCandidates: StockStrategyCandidate[];
   Data: StockStrategyCandidate[];
 }
 
@@ -293,7 +275,10 @@ export async function screenStockStrategies(
   const excludeSymbols = new Set((input.excludeSymbols ?? []).map(symbolKeyword));
 
   let accountContext: AccountScreeningContext | undefined;
-  if (includeAccountContext) {
+  if (includeAccountContext && !input.accountKey) {
+    warnings.push('Account context skipped because accountKey was not supplied.');
+  }
+  if (includeAccountContext && input.accountKey) {
     accountContext = await buildAccountContext(client, { accountKey: input.accountKey, warnings });
   }
 
@@ -335,7 +320,7 @@ export async function screenStockStrategies(
   }
 
   const prelimRanked = preliminary
-    .sort((a, b) => b.rankingBreakdown.finalScore - a.rankingBreakdown.finalScore)
+    .sort((a, b) => stockFactorSortScore(b.factorScores) - stockFactorSortScore(a.factorScores))
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
   const enrichedBySymbol = new Map<string, StockStrategyCandidate>();
   const enrichmentLimit = Math.max(maxResults, fundamentalsLimit, maxTechnicalCandidates);
@@ -381,17 +366,17 @@ export async function screenStockStrategies(
   }
   const finalCandidates = preliminary.map(candidate => enrichedBySymbol.get(symbolKeyword(candidate.symbol)) ?? candidate);
   const screened = finalCandidates.filter(candidate =>
-    candidate.positionSizing?.sizingVerdict !== 'blocked' && candidate.positionSizing?.sizingVerdict !== 'too_large',
+    candidate.positionSizing?.sizingStatus !== 'blocked_by_constraint' && candidate.positionSizing?.sizingStatus !== 'over_budget',
   );
   const deferred = finalCandidates.filter(candidate =>
-    candidate.positionSizing?.sizingVerdict === 'blocked' || candidate.positionSizing?.sizingVerdict === 'too_large',
+    candidate.positionSizing?.sizingStatus === 'blocked_by_constraint' || candidate.positionSizing?.sizingStatus === 'over_budget',
   );
   const ranked = screened
-    .sort((a, b) => b.rankingBreakdown.finalScore - a.rankingBreakdown.finalScore)
+    .sort((a, b) => stockFactorSortScore(b.factorScores) - stockFactorSortScore(a.factorScores))
     .slice(0, maxResults)
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
-  const blockedOrDeferredIdeas = deferred
-    .sort((a, b) => b.rankingBreakdown.finalScore - a.rankingBreakdown.finalScore)
+  const constraintLimitedCandidates = deferred
+    .sort((a, b) => stockFactorSortScore(b.factorScores) - stockFactorSortScore(a.factorScores))
     .slice(0, maxResults)
     .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
 
@@ -427,8 +412,7 @@ export async function screenStockStrategies(
     },
     warnings,
     accountContext,
-    decisionBriefs: ranked.map(buildDecisionBrief),
-    blockedOrDeferredIdeas,
+    constraintLimitedCandidates,
     Data: ranked,
   };
 }
@@ -436,7 +420,7 @@ export async function screenStockStrategies(
 async function resolveCandidates(
   client: SaxoClient,
   input: {
-    accountKey: string;
+    accountKey?: string;
     market: Extract<MarketScreenMarket, 'us' | 'us_nasdaq' | 'us_nyse'>;
     maxCandidates: number;
     symbols?: string[];
@@ -493,7 +477,7 @@ async function resolveCandidates(
 async function resolveStockSymbol(
   client: SaxoClient,
   symbol: string,
-  accountKey: string,
+  accountKey: string | undefined,
 ): Promise<CandidateInstrument | undefined> {
   const keyword = symbolKeyword(symbol);
   const response = await client.get<Feed<InstrumentSummary>>('/ref/v1/instruments', {
@@ -513,7 +497,7 @@ async function resolveStockSymbol(
 async function fetchStockPrices(
   client: SaxoClient,
   candidates: CandidateInstrument[],
-  accountKey: string,
+  accountKey: string | undefined,
   warnings: string[],
 ): Promise<Map<number, InfoPriceResponse>> {
   const prices = new Map<number, InfoPriceResponse>();
@@ -558,7 +542,7 @@ function toCandidateInstrument(summary: InstrumentSummary): CandidateInstrument 
 function toCandidateRow(
   candidate: CandidateInstrument,
   price: InfoPriceResponse,
-): Omit<StockStrategyCandidate, 'rank' | 'rankingBreakdown' | 'whyItRanked' | 'keyRisks'> | undefined {
+): Omit<StockStrategyCandidate, 'rank' | 'factorScores' | 'factorSummary' | 'keyRisks'> | undefined {
   if (price.ErrorCode || price.Quote?.ErrorCode && price.Quote.ErrorCode !== 'None') {
     return undefined;
   }
@@ -591,7 +575,7 @@ async function buildTechnicalContext(
   client: SaxoClient,
   candidate: Pick<StockStrategyCandidate, 'assetType' | 'symbol' | 'uic'>,
   options: {
-    accountKey: string;
+    accountKey?: string;
     horizon: number;
     bars: number;
     now: Date;
@@ -673,7 +657,7 @@ async function buildFundamentalsContext(
 }
 
 function enrichStockDecisionSupport(
-  base: Omit<StockStrategyCandidate, 'rank' | 'rankingBreakdown' | 'whyItRanked' | 'keyRisks'>,
+  base: Omit<StockStrategyCandidate, 'rank' | 'factorScores' | 'factorSummary' | 'keyRisks'>,
   options: {
     accountContext?: AccountScreeningContext;
     allowExistingExposureIncrease: boolean;
@@ -688,7 +672,7 @@ function enrichStockDecisionSupport(
   },
 ): StockStrategyCandidate {
   const positionSizing = buildStockPositionSizing(base, options);
-  const rankingBreakdown = buildRanking(base, {
+  const factorScores = buildFactorScores(base, {
     accountFitScore: scoreAccountFit(positionSizing),
     externalContext: options.externalContext,
     fundamentalsContext: options.fundamentalsContext,
@@ -705,9 +689,9 @@ function enrichStockDecisionSupport(
     options.externalContext,
     positionSizing,
   );
-  const whyItRanked = explainRanking(
+  const factorSummary = explainFactors(
     base,
-    rankingBreakdown,
+    factorScores,
     options.objective,
     options.technicalContext,
     options.newsContext,
@@ -721,9 +705,9 @@ function enrichStockDecisionSupport(
     keyRisks,
     newsContext: options.newsContext,
     positionSizing,
-    rankingBreakdown,
+    factorScores,
     technicalContext: options.technicalContext,
-    whyItRanked,
+    factorSummary,
     rank: 0,
   };
 }
@@ -753,15 +737,15 @@ function buildStockPositionSizing(
   const symbolExposureAfterTradePercent = netValue && symbolExposureAfterTrade
     ? Math.abs(symbolExposureAfterTrade) / netValue * 100
     : undefined;
-  let sizingVerdict: SizingVerdict = 'unknown';
+  let sizingStatus: SizingStatus = 'unknown';
 
   if (!netValue || !price || effectiveBudget === undefined || maxShares === undefined) {
     notes.push('Account sizing is limited because account value or live stock price could not be derived.');
   } else if (maxShares < 1) {
-    sizingVerdict = 'too_large';
+    sizingStatus = 'over_budget';
     notes.push(`Configured risk budget cannot buy one share at ${formatMoney(price)}.`);
   } else {
-    sizingVerdict = 'pass';
+    sizingStatus = 'fits';
     notes.push(`Up to ${maxShares} share(s) fit the configured per-idea budget and concentration cap.`);
   }
 
@@ -769,7 +753,7 @@ function buildStockPositionSizing(
     symbolExposureAfterTradePercent !== undefined &&
     symbolExposureAfterTradePercent > options.maxSingleNamePercent
   ) {
-    sizingVerdict = options.allowExistingExposureIncrease ? 'watchlist' : 'blocked';
+    sizingStatus = options.allowExistingExposureIncrease ? 'limited' : 'blocked_by_constraint';
     notes.push(`Estimated symbol exposure would be ${round(symbolExposureAfterTradePercent)}%, above ${options.maxSingleNamePercent}%.`);
   }
 
@@ -783,12 +767,12 @@ function buildStockPositionSizing(
     symbolExposureBefore: roundMoney(symbolExposureBefore),
     symbolExposureAfterTrade: roundMoney(symbolExposureAfterTrade),
     symbolExposureAfterTradePercent: round(symbolExposureAfterTradePercent),
-    sizingVerdict,
+    sizingStatus,
     sizingNotes: notes,
   };
 }
 
-function buildRanking(
+function buildFactorScores(
   candidate: Pick<StockStrategyCandidate, 'bid' | 'ask' | 'lastTraded' | 'mid' | 'percentChange' | 'volume'>,
   options: {
     accountFitScore: number;
@@ -799,7 +783,7 @@ function buildRanking(
     riskProfile: RiskProfile;
     technicalContext?: StockTechnicalContext;
   },
-): StockRankingBreakdown {
+): StockFactorScores {
   const liquidityScore = scoreLiquidity(candidate);
   const trendScore = scoreTrend(options.technicalContext, candidate.percentChange, options.objective);
   const volatilityScore = scoreVolatility(options.technicalContext, options.riskProfile);
@@ -811,14 +795,6 @@ function buildRanking(
     technicalContext: options.technicalContext,
     percentChange: candidate.percentChange,
   });
-  const finalScore = clampScore(
-    liquidityScore * 0.25 +
-    trendScore * 0.2 +
-    volatilityScore * 0.15 +
-    contextScore * 0.1 +
-    objectiveFitScore * 0.2 +
-    options.accountFitScore * 0.1,
-  );
   return {
     liquidityScore,
     trendScore,
@@ -826,8 +802,18 @@ function buildRanking(
     contextScore,
     objectiveFitScore,
     accountFitScore: options.accountFitScore,
-    finalScore,
   };
+}
+
+function stockFactorSortScore(factors: StockFactorScores): number {
+  return clampScore(
+    factors.liquidityScore * 0.25 +
+    factors.trendScore * 0.2 +
+    factors.volatilityScore * 0.15 +
+    factors.contextScore * 0.1 +
+    factors.objectiveFitScore * 0.2 +
+    factors.accountFitScore * 0.1,
+  );
 }
 
 function scoreLiquidity(candidate: Pick<StockStrategyCandidate, 'ask' | 'bid' | 'mid' | 'volume'>): number {
@@ -920,16 +906,16 @@ function scoreMarketCap(fundamentalsContext: MarketFundamentalsContext | undefin
 
 function scoreAccountFit(sizing: PositionSizing | undefined): number {
   if (!sizing) return 45;
-  if (sizing.sizingVerdict === 'pass') return 90;
-  if (sizing.sizingVerdict === 'watchlist') return 60;
-  if (sizing.sizingVerdict === 'too_large') return 20;
-  if (sizing.sizingVerdict === 'blocked') return 0;
+  if (sizing.sizingStatus === 'fits') return 90;
+  if (sizing.sizingStatus === 'limited') return 60;
+  if (sizing.sizingStatus === 'over_budget') return 20;
+  if (sizing.sizingStatus === 'blocked_by_constraint') return 0;
   return 45;
 }
 
-function explainRanking(
+function explainFactors(
   candidate: Pick<StockStrategyCandidate, 'symbol'>,
-  ranking: StockRankingBreakdown,
+  ranking: StockFactorScores,
   objective: StockStrategyObjective,
   technicalContext: StockTechnicalContext | undefined,
   newsContext: MarketNewsContext | undefined,
@@ -937,12 +923,12 @@ function explainRanking(
   sizing: PositionSizing | undefined,
 ): string[] {
   return [
-    `Final score ${ranking.finalScore}: liquidity ${ranking.liquidityScore}, trend ${ranking.trendScore}, volatility ${ranking.volatilityScore}, objective fit ${ranking.objectiveFitScore}, account fit ${ranking.accountFitScore}.`,
-    `${candidate.symbol} is ranked for ${objective}.`,
+    `Factor scores: liquidity ${ranking.liquidityScore}, trend ${ranking.trendScore}, volatility ${ranking.volatilityScore}, objective fit ${ranking.objectiveFitScore}, account fit ${ranking.accountFitScore}.`,
+    `${candidate.symbol} factor context for ${objective}.`,
     fundamentalsContext?.summary,
     technicalContext?.summary,
     newsContext?.summary,
-    sizing?.sizingVerdict !== 'unknown' ? `Account sizing verdict: ${sizing?.sizingVerdict}.` : undefined,
+    sizing?.sizingStatus !== 'unknown' ? `Account sizing status: ${sizing?.sizingStatus}.` : undefined,
   ].filter(isDefined);
 }
 
@@ -960,7 +946,7 @@ function collectKeyRisks(
   for (const note of fundamentalsContext?.riskNotes ?? []) risks.add(note);
   for (const note of externalContext?.riskNotes ?? []) risks.add(note);
   for (const note of sizing?.sizingNotes ?? []) {
-    if (sizing?.sizingVerdict !== 'pass' || /limited|above|cannot|exceeds/i.test(note)) {
+    if (sizing?.sizingStatus !== 'fits' || /limited|above|cannot|exceeds/i.test(note)) {
       risks.add(note);
     }
   }
@@ -977,84 +963,6 @@ function collectKeyRisks(
     risks.add('No single data point is sufficient; verify current quote, catalyst calendar, and portfolio fit before trading.');
   }
   return Array.from(risks);
-}
-
-function buildDecisionBrief(candidate: StockStrategyCandidate): StockDecisionBrief {
-  const verdict = decisionVerdict(candidate);
-  const confidence = decisionConfidence(candidate);
-  return {
-    rank: candidate.rank,
-    symbol: candidate.symbol,
-    verdict,
-    confidence,
-    oneLine: oneLineDecision(candidate, verdict),
-    tradeSummary: stockTradeSummary(candidate),
-    whyItRanked: candidate.whyItRanked,
-    keyRisks: candidate.keyRisks,
-    decisionRules: stockDecisionRules(candidate),
-    questionsBeforeTrade: stockQuestionsBeforeTrade(candidate),
-    accountFit: candidate.positionSizing,
-  };
-}
-
-function decisionVerdict(candidate: StockStrategyCandidate): DecisionVerdict {
-  if (candidate.positionSizing?.sizingVerdict === 'blocked' || candidate.positionSizing?.sizingVerdict === 'too_large') {
-    return 'reject';
-  }
-  if (candidate.rankingBreakdown.finalScore >= 78 && candidate.keyRisks.length <= 2) {
-    return 'pass';
-  }
-  return 'watchlist';
-}
-
-function decisionConfidence(candidate: StockStrategyCandidate): DecisionConfidence {
-  if (
-    candidate.rankingBreakdown.finalScore >= 78 &&
-    candidate.technicalContext &&
-    candidate.positionSizing?.sizingVerdict === 'pass'
-  ) {
-    return 'high';
-  }
-  if (candidate.rankingBreakdown.finalScore >= 60 && candidate.positionSizing?.sizingVerdict !== 'unknown') {
-    return 'medium';
-  }
-  return 'low';
-}
-
-function oneLineDecision(candidate: StockStrategyCandidate, verdict: DecisionVerdict): string {
-  if (verdict === 'reject') {
-    return `${candidate.symbol} is not account-fit under the current sizing constraints.`;
-  }
-  return `${candidate.symbol} is a ${verdict} stock candidate with ${candidate.positionSizing?.sizingVerdict ?? 'unknown'} account sizing.`;
-}
-
-function stockTradeSummary(candidate: StockStrategyCandidate): string {
-  const price = candidate.mid ?? candidate.lastTraded;
-  const shares = candidate.positionSizing?.maxContracts;
-  return `${candidate.symbol} stock candidate at ${formatMoney(price)}${shares ? `, up to ${shares} share(s) under configured sizing` : ''}.`;
-}
-
-function stockDecisionRules(candidate: StockStrategyCandidate): string[] {
-  return [
-    candidate.mid
-      ? `Use a limit order near the live mid/last reference ${formatMoney(candidate.mid)} or better; re-check if quote changes materially.`
-      : 'Do not trade without a live executable quote.',
-    candidate.positionSizing?.maxContracts !== undefined
-      ? `Do not exceed ${candidate.positionSizing.maxContracts} share(s) under this screen's risk and concentration settings.`
-      : 'Set explicit account-aware sizing before trading.',
-    'Treat this as a portfolio building block; avoid adding if it breaks cash reserve or concentration limits.',
-  ];
-}
-
-function stockQuestionsBeforeTrade(candidate: StockStrategyCandidate): string[] {
-  const questions = [
-    'Is there an earnings, regulatory, product, or macro catalyst that changes the setup?',
-    'Does the position still fit the intended portfolio sleeve after other planned trades?',
-  ];
-  if (candidate.technicalContext?.bias === 'bearish') {
-    questions.push('Is the bearish technical bias a value opportunity or a reason to wait?');
-  }
-  return questions;
 }
 
 async function buildAccountContext(

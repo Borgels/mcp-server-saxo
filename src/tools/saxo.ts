@@ -51,7 +51,13 @@ import {
 } from '../saxo/reference.js';
 import { screenMarket } from '../saxo/screener.js';
 import { screenStockStrategies } from '../saxo/stock-strategy-screener.js';
-import { getDiagnostics, getFeatureAvailability, getSessionMe } from '../saxo/session.js';
+import {
+  getDiagnostics,
+  getFeatureAvailability,
+  getSessionCapabilitiesTool,
+  getSessionMe,
+  setSessionTradeLevel,
+} from '../saxo/session.js';
 import {
   createPriceAlert,
   deletePriceAlerts,
@@ -320,14 +326,14 @@ const marketNewsContextSchema = z.object({
 const optionStrategyPlanSchema = z.object({
   keywords: z.string().trim().min(1).optional(),
   optionRootId: z.number().int().positive().optional(),
-  accountKey: z.string().trim().min(1),
+  accountKey: z.string().trim().min(1).optional(),
   minDte: z.number().int().min(0).max(3650).optional(),
   maxDte: z.number().int().min(0).max(3650).optional(),
   strikeWindowPercent: z.number().positive().max(1000).optional(),
   putCall: putCallSchema.optional(),
   limitExpiries: z.number().int().min(1).max(50).optional(),
   limitStrikesPerExpiry: z.number().int().min(1).max(200).optional(),
-  strategies: z.array(optionStrategySchema).min(1).max(5).optional(),
+  strategies: z.array(optionStrategySchema).min(1).max(5),
   maxCandidates: z.number().int().min(1).max(25).optional(),
   riskBudget: z.number().positive().optional(),
   allowShortOptionLegs: z.boolean().default(true),
@@ -358,15 +364,12 @@ const externalStrategyContextSchema = z.object({
 });
 
 const optionStrategyScreenerSchema = z.object({
-  accountKey: z.string().trim().min(1),
+  accountKey: z.string().trim().min(1).optional(),
   market: z.enum(['us', 'us_nasdaq', 'us_nyse']).default('us'),
   symbols: z.array(z.string().trim().min(1)).max(50).optional(),
   underlyingUniverse: underlyingUniverseSchema.default('auto'),
   underlyingPreset: z.enum(['top_gainers', 'top_losers', 'premarket_gainers', 'premarket_losers']).optional(),
-  playbook: strategyPlaybookSchema.default('income_30_60d'),
-  riskProfile: riskProfileSchema.default('balanced'),
-  objective: tradeObjectiveSchema.optional(),
-  strategies: z.array(optionStrategySchema).min(1).max(5).optional(),
+  strategies: z.array(optionStrategySchema).min(1).max(5),
   minDte: z.number().int().min(0).max(3650).optional(),
   maxDte: z.number().int().min(0).max(3650).optional(),
   maxUnderlyings: z.number().int().min(1).max(50).default(50),
@@ -398,7 +401,7 @@ const optionStrategyScreenerSchema = z.object({
 });
 
 const stockStrategyScreenerSchema = z.object({
-  accountKey: z.string().trim().min(1),
+  accountKey: z.string().trim().min(1).optional(),
   market: z.enum(['us', 'us_nasdaq', 'us_nyse']).default('us'),
   symbols: z.array(z.string().trim().min(1)).max(50).optional(),
   excludeSymbols: z.array(z.string().trim().min(1)).max(50).optional(),
@@ -580,6 +583,41 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
     async () =>
       runAuditedTool(client, 'saxo_session_me', {}, async () =>
         jsonToolResult(await getSessionMe(client)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_get_session_capabilities',
+    {
+      title: 'Get Saxo Session Capabilities',
+      description:
+        'Return current Saxo session capabilities, including TradeLevel and DataLevel, without running diagnostics.',
+      inputSchema: {},
+      annotations: READ_TOOL_ANNOTATIONS,
+    },
+    async () =>
+      runAuditedTool(client, 'saxo_get_session_capabilities', {}, async () =>
+        jsonToolResult(await getSessionCapabilitiesTool(client)),
+      ),
+  );
+
+  server.registerTool(
+    'saxo_set_session_trade_level',
+    {
+      title: 'Set Saxo Session TradeLevel',
+      description:
+        'Set session TradeLevel to FullTradingAndChat or OrdersOnly and return the confirmed session capabilities. LIVE requires policy.allow_live_session_capability_writes=true.',
+      inputSchema: {
+        tradeLevel: z.enum(['FullTradingAndChat', 'OrdersOnly']),
+        confirmTimeoutMs: z.number().int().min(250).max(60_000).default(10_000),
+      },
+      annotations: WRITE_TOOL_ANNOTATIONS,
+    },
+    async input =>
+      runAuditedTool(client, 'saxo_set_session_trade_level', input, async () =>
+        jsonToolResult(await setSessionTradeLevel(client, input.tradeLevel, {
+          confirmTimeoutMs: input.confirmTimeoutMs,
+        })),
       ),
   );
 
@@ -898,61 +936,61 @@ export function registerSaxoTools(server: McpServer, client: SaxoClient): void {
   );
 
   server.registerTool(
-    'saxo_plan_option_strategy',
+    'saxo_generate_option_strategy_candidates',
     {
-      title: 'Plan Option Strategy',
+      title: 'Generate Option Strategy Candidates',
       description:
-        'Opinionated read-only options strategy planner for cash-secured puts, vertical spreads, debit spreads, and iron condors. Can include Saxo OptionsChain IV rank/percentile context. Returns ranked trade plans and precheck drafts; does not call precheck or place orders.',
+        'Read-only option candidate generator for explicit caller-provided strategies. Returns structures, legs, pricing, Greeks, and factor context; does not choose a playbook, call precheck, or place orders.',
       inputSchema: optionStrategyPlanSchema.shape,
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runAuditedTool(client, 'saxo_plan_option_strategy', input, async () =>
+      runAuditedTool(client, 'saxo_generate_option_strategy_candidates', input, async () =>
         jsonToolResult(await planOptionStrategy(client, input)),
       ),
   );
 
   server.registerTool(
-    'saxo_screen_option_strategies',
+    'saxo_screen_option_strategy_factors',
     {
-      title: 'Screen Option Strategies',
+      title: 'Screen Option Strategy Factors',
       description:
-        'Opinionated read-only screener that finds liquid US stock underlyings, derives Saxo chart, OptionsChain IV, and account-aware sizing context, can optionally enrich with Alpha Vantage news/earnings, runs option strategy planning, and returns ranked plans plus decision briefs. Saxo-only by default; does not call precheck or place orders.',
+        'Read-only factor screener for explicit option strategies across symbols or Saxo market movers. Returns candidate structures, liquidity, chart, IV/Greeks, optional news, and sizing context without verdicts or confidence labels.',
       inputSchema: optionStrategyScreenerSchema.shape,
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runAuditedTool(client, 'saxo_screen_option_strategies', input, async () =>
+      runAuditedTool(client, 'saxo_screen_option_strategy_factors', input, async () =>
         jsonToolResult(await screenOptionStrategies(client, input)),
       ),
   );
 
   server.registerTool(
-    'saxo_screen_stock_strategies',
+    'saxo_screen_stock_factors',
     {
-      title: 'Screen Stock Strategies',
+      title: 'Screen Stock Factors',
       description:
-        'Opinionated read-only stock strategy screener with Saxo quotes, chart-based technical context, account-aware sizing, optional Alpha Vantage fundamentals/news, and decision briefs. Does not call precheck or place orders.',
+        'Read-only stock factor screener with Saxo quotes, chart context, optional account sizing, and optional Alpha Vantage fundamentals/news. Returns factors and warnings without verdicts or confidence labels.',
       inputSchema: stockStrategyScreenerSchema.shape,
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runAuditedTool(client, 'saxo_screen_stock_strategies', input, async () =>
+      runAuditedTool(client, 'saxo_screen_stock_factors', input, async () =>
         jsonToolResult(await screenStockStrategies(client, input)),
       ),
   );
 
   server.registerTool(
-    'saxo_plan_portfolio_strategy',
+    'saxo_analyze_portfolio_context',
     {
-      title: 'Plan Portfolio Strategy',
+      title: 'Analyze Portfolio Context',
       description:
-        'Read-only whole-account portfolio strategy planner. Combines account snapshot, stock strategy screening, option strategy screening, risk caps, target allocation, and staged deployment into one decision package. Does not call precheck or place orders.',
+        'Read-only whole-account context analyzer. Combines account snapshot, stock factors, option factors, risk budgets, concentration context, and warnings without allocation or deployment recommendations.',
       inputSchema: portfolioStrategySchema.shape,
       annotations: READ_TOOL_ANNOTATIONS,
     },
     async input =>
-      runAuditedTool(client, 'saxo_plan_portfolio_strategy', input, async () =>
+      runAuditedTool(client, 'saxo_analyze_portfolio_context', input, async () =>
         jsonToolResult(await planPortfolioStrategy(client, input)),
       ),
   );
