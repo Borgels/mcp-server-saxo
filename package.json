@@ -38,7 +38,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Borgels/mcp-server-saxo.git"
+    "url": "git+https://github.com/borgels/mcp-server-saxo.git"
   },
   "keywords": [
     "mcp",
@@ -59,9 +59,9 @@
     "registry": "https://registry.npmjs.org/"
   },
   "bugs": {
-    "url": "https://github.com/Borgels/mcp-server-saxo/issues"
+    "url": "https://github.com/borgels/mcp-server-saxo/issues"
   },
-  "homepage": "https://github.com/Borgels/mcp-server-saxo#readme",
+  "homepage": "https://github.com/borgels/mcp-server-saxo#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
     "zod": "^4.4.3"
